@@ -1,0 +1,98 @@
+# 这个文件在 GitHub 仓库里的位置必须是：.github/workflows/update-and-deploy.yml
+# 每个美股交易日收盘后：拉最新 QQQ 和 TQQQ 行情 → 保存到 docs/data.json → 发布网站到 GitHub Pages
+
+name: 每日更新数据并发布网站
+
+on:
+  schedule:
+    # UTC 22:30，周一到周五 = 北京时间 周二到周六 早上 06:30（美股已收盘）
+    # GitHub 的定时任务偶尔会晚几十分钟，属于正常现象
+    - cron: "30 22 * * 1-5"
+  workflow_dispatch: {} # 允许在 Actions 页面手动点 "Run workflow"
+  push:
+    branches: [main] # 你改了网页或设置并提交后，自动重新发布
+
+concurrency:
+  group: update-and-deploy
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write # 需要把新数据提交回仓库
+    steps:
+      - name: 下载仓库代码
+        uses: actions/checkout@v7
+
+      - name: 安装 Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: 安装依赖（只有直连 Yahoo 失败时才会用到）
+        run: pip install -r requirements.txt
+
+      - name: 安装 Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: 跑一遍测试
+        run: |
+          node --test tests/strategy.test.js
+          node --test tests/reminder.test.js
+
+      - name: 更新行情数据
+        id: data
+        continue-on-error: true # 数据源暂时失败时，照样用旧数据发布网站（网页会提示数据没更新）
+        run: python scripts/update_data.py
+
+      - name: 把新数据提交回仓库
+        if: steps.data.outcome == 'success'
+        continue-on-error: true # 推送失败不影响下面发布网站
+        run: |
+          if git diff --quiet -- docs/data.json; then
+            echo "数据没有变化，不需要提交"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add docs/data.json
+            git commit -m "更新 QQQ + TQQQ 行情数据 $(date -u +%Y-%m-%d)"
+            # 别人同时提交时会推送失败，重试几次
+            for i in 1 2 3 4 5; do
+              git pull --rebase origin main && git push && exit 0
+              echo "::warning::第 $i 次推送失败，等一下再试"
+              sleep $((i * 10))
+            done
+            echo "::warning::行情数据没能提交回仓库，网站这次仍按新数据发布，下次更新会再试"
+          fi
+
+      - name: 打包网站文件
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: docs
+
+      - name: 如果数据没更新成功，标记为失败（GitHub 会发邮件提醒你）
+        if: steps.data.outcome == 'failure'
+        run: |
+          echo "::warning::今天的行情数据没有更新成功，网站暂时显示旧数据。通常第二天会自动恢复。"
+          exit 1
+
+  deploy:
+    needs: update
+    if: ${{ !cancelled() }} # 数据更新失败也照常发布（用旧数据）
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+      actions: read
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: 发布到 GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v5
