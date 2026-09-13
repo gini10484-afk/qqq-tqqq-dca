@@ -1,0 +1,53 @@
+# 这个文件在 GitHub 仓库里的位置必须是：.github/workflows/weekly-reminder.yml
+# 定投日提醒：每个工作日北京时间 20:00 检查一次，今天是定投日就在仓库里发一条提醒并 @你。
+# GitHub 会把提醒发到你的注册邮箱；手机装了 GitHub App 还会收到推送。
+
+name: 定投日提醒
+
+on:
+  schedule:
+    # UTC 12:00 = 北京时间 20:00（美东当天早上）。脚本会判断今天是不是定投日，不是就什么都不做
+    - cron: "0 12 * * 1-5"
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "不管今天是不是定投日，都发一条测试提醒"
+        type: boolean
+        default: true
+
+concurrency:
+  group: weekly-reminder
+  cancel-in-progress: false
+
+jobs:
+  remind:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write # 需要在仓库里发提醒
+    steps:
+      - name: 下载仓库代码
+        uses: actions/checkout@v7
+
+      - name: 安装 Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+
+      - name: 算这次该投多少、买哪个
+        id: calc
+        run: node scripts/weekly_reminder.js ${{ inputs.force && '--force' || '' }}
+
+      - name: 关闭上一条提醒，发新提醒
+        if: steps.calc.outputs.skip == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ steps.calc.outputs.title }}
+          BODY_PATH: ${{ steps.calc.outputs.body_path }}
+        run: |
+          gh label create "定投提醒" --color 2a78d6 --description "定投日自动提醒" 2>/dev/null || true
+          for n in $(gh issue list --label "定投提醒" --state open --json number --jq '.[].number'); do
+            gh issue close "$n" --comment "新的提醒已经发出，这条自动关闭。"
+          done
+          gh issue create --title "$TITLE" --body-file "$BODY_PATH" --label "定投提醒"
