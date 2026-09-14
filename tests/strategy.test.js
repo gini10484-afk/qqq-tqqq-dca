@@ -348,3 +348,101 @@ test("稳妥模式：这次的钱怎么分", () => {
   close(p.weightsAfter[1], 30, 1e-6);
   close(p.weightsAfter[2], 10, 1e-6);
 });
+
+// ---------- 卖出规则 ----------
+
+test("卖出规则：老的 sellOnRecover 会被翻译成 sellMode:ma", () => {
+  assert.equal(DCA.withDefaults({}).sellMode, "cap");
+  assert.equal(DCA.withDefaults({ sellOnRecover: true }).sellMode, "ma");
+  // 明写 sellMode 时以它为准
+  assert.equal(DCA.withDefaults({ sellOnRecover: true, sellMode: "cap" }).sellMode, "cap");
+  assert.equal(DCA.withDefaults({ sellMode: "瞎写" }).sellMode, "cap");
+});
+
+test("sellTargetFor：每种规则什么时候要求减仓、减到多少", () => {
+  const dd = [30, 4], dev = [-5, 8], ok = [1, 1];
+  const tl = { dev, ok };
+  const cap = DCA.withDefaults({ sellMode: "cap" });
+  const ma = DCA.withDefaults({ sellMode: "ma" });
+  const peak = DCA.withDefaults({ sellMode: "peak", sellPeakWithin: 5, sellTargetShare: 10 });
+  const none = DCA.withDefaults({ sellMode: "none" });
+  // 跌破均线、跌得深：谁都不要求卖
+  assert.equal(DCA.sellTargetFor(cap, dd, tl, 0), null);
+  assert.equal(DCA.sellTargetFor(ma, dd, tl, 0), null);
+  assert.equal(DCA.sellTargetFor(peak, dd, tl, 0), null);
+  // 站回均线上方、离前高只剩 4%：ma 要求清空，peak 要求减到 10%
+  assert.equal(DCA.sellTargetFor(cap, dd, tl, 1), null);
+  assert.equal(DCA.sellTargetFor(ma, dd, tl, 1), 0);
+  assert.equal(DCA.sellTargetFor(peak, dd, tl, 1), 10);
+  assert.equal(DCA.sellTargetFor(none, dd, tl, 1), null);
+  // i<0（数据不够）不要求卖
+  assert.equal(DCA.sellTargetFor(ma, dd, tl, -1), null);
+});
+
+test("回测：sellMode 决定 TQQQ 最后剩多少", () => {
+  const d = tradingDays("2020-01-06", 400);
+  const qs = d.map((_, i) => ramp(i)); // 先跌四成五再涨回去并创新高
+  const s = series(d, qs);
+  const base = { baseAmount: 100, investWeekday: 1, basis: "ath", maWindow: 20, dipThreshold: 20, tqqqCap: 20, flowShare: 100 };
+  const run = (m) => DCA.backtest(s, Object.assign({}, base, { sellMode: m }), { mode: "dip" });
+  const cap = run("cap"), ma = run("ma"), none = run("none");
+  // 涨回均线全卖：最后一分 TQQQ 都不剩
+  close(ma.tqqqShare, 0, 1e-9);
+  assert.ok(ma.sold > 0, "ma 模式应该真的卖过");
+  // 只守上限：贴着上限
+  assert.ok(cap.tqqqShare > 0 && cap.tqqqShare < 25, `cap 应该在上限附近，实际 ${cap.tqqqShare}`);
+  // 完全不卖：一次都没动过，占比比守上限的高
+  assert.equal(none.rebalances, 0);
+  close(none.sold, 0);
+  assert.ok(none.tqqqShare > cap.tqqqShare, `不卖应该占比更高：${none.tqqqShare} vs ${cap.tqqqShare}`);
+});
+
+test("回测：peak 模式减到目标比例而不是清空", () => {
+  const d = tradingDays("2020-01-06", 400);
+  const s = series(d, d.map((_, i) => ramp(i)));
+  const base = { baseAmount: 100, investWeekday: 1, basis: "ath", maWindow: 20, dipThreshold: 20, tqqqCap: 20, flowShare: 100 };
+  const r = DCA.backtest(s, Object.assign({}, base, { sellMode: "peak", sellPeakWithin: 5, sellTargetShare: 10 }), { mode: "dip" });
+  assert.ok(r.sold > 0, "peak 模式应该卖过");
+  // 目标 10%，再平衡只发生在定投日，所以留一点余量
+  assert.ok(r.tqqqShare <= 15, `peak 之后 TQQQ 占比应该被压到目标附近，实际 ${r.tqqqShare}`);
+});
+
+test("现在该买还是该卖：条件距离和按持仓算的卖出量", () => {
+  const d = tradingDays("2020-01-06", 120);
+  // 一路横盘，最后停在均线上方、离高点很近
+  const s = series(d, d.map(() => 100), d.map(() => 50));
+  const st = DCA.currentStatus(s, { maWindow: 20, dipThreshold: 20, tqqqCap: 20, basis: "ath" },
+    { qqqShares: 10, tqqqShares: 10 });
+  assert.equal(st.buy.asset, "QQQ");
+  assert.equal(st.gap.belowMA, false);
+  assert.equal(st.gap.deepEnough, false);
+  close(st.gap.ddGap, 20); // 完全没跌，离 20% 的门槛还差 20 个点
+  // 组合 1000 + 500 = 1500，TQQQ 占 33.3%，上限 20% → 该卖到 300
+  close(st.hold.total, 1500);
+  close(st.hold.tqqqShare, 100 / 3, 1e-9);
+  close(st.hold.sellAmount, 200);
+  close(st.hold.sellShares, 4);
+  assert.equal(st.hold.kind, "cap");
+  assert.equal(st.hold.needSell, true);
+  // 没到上限就不用卖
+  const ok2 = DCA.currentStatus(s, { maWindow: 20, tqqqCap: 20, basis: "ath" }, { qqqShares: 100, tqqqShares: 1 });
+  assert.equal(ok2.hold.needSell, false);
+  close(ok2.hold.sellAmount, 0);
+  // 不传持仓也能用
+  assert.equal(DCA.currentStatus(s, {}, null).hold, null);
+});
+
+test("现在该买还是该卖：sellMode 影响提示但不影响买什么", () => {
+  const d = tradingDays("2020-01-06", 120);
+  const s = series(d, d.map(() => 100), d.map(() => 50));
+  const cap = DCA.currentStatus(s, { maWindow: 20, basis: "ath", sellMode: "cap" }, null);
+  const ma = DCA.currentStatus(s, { maWindow: 20, basis: "ath", sellMode: "ma" }, null);
+  assert.equal(cap.buy.asset, ma.buy.asset);
+  assert.equal(cap.sell.triggered, false);
+  assert.equal(ma.sell.triggered, true); // 横盘在均线上，ma 规则要求清空
+  assert.equal(ma.sell.targetShare, 0);
+  // "none" 模式下持仓超上限也不提示卖
+  const none = DCA.currentStatus(s, { maWindow: 20, basis: "ath", sellMode: "none", tqqqCap: 20 },
+    { qqqShares: 1, tqqqShares: 10 });
+  assert.equal(none.hold.needSell, false);
+});
