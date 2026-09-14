@@ -206,6 +206,14 @@
   .bar-track .q { background: var(--s-combo); }
   .bar-track .t { background: var(--s-dip); }
   .bar-track .c { background: var(--s-steady); }
+
+  textarea.backup { width: 100%; box-sizing: border-box; margin-top: 10px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px; line-height: 1.5; color: var(--ink); background: var(--surface); border: 1px solid var(--axis);
+    border-radius: 8px; padding: 10px; resize: vertical; }
+  .tag { display: inline-block; font-size: 11px; font-weight: 650; color: #fff; border-radius: 4px; padding: 1px 6px; }
+  .tag.q { background: var(--s-combo); }
+  .tag.t { background: var(--s-dip); }
+  .tag.s { background: var(--s-steady); }
   .bar-track .cap { width: 2px; background: var(--ink); }
 
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
@@ -393,6 +401,39 @@
       </div>
     </section>
 
+    <section class="block" aria-labelledby="anTitle">
+      <div class="section-head">
+        <div><h2 id="anTitle">每年固定投一笔会怎样</h2>
+          <p class="sub">按当年人民币兑美元的年平均价换成美元。四种做法每年投进去的钱完全一样，区别只是怎么分配</p></div>
+      </div>
+      <div class="card">
+        <div class="plan-form">
+          <label class="field">每年投
+            <span class="unit-input"><span>¥</span><input id="anAmount" type="number" min="1000" step="10000" inputmode="decimal"></span>
+          </label>
+          <label class="field">从哪年开始
+            <select id="anYear"></select>
+          </label>
+        </div>
+        <p class="verdict" id="anVerdict" style="font-size:15px"></p>
+        <div class="table-wrap">
+          <table id="anTable">
+            <thead>
+              <tr>
+                <th scope="col">做法</th><th scope="col">总投入</th><th scope="col">现在市值</th>
+                <th scope="col">年化<span class="note">人民币</span></th>
+                <th scope="col">年化<span class="note">美元</span></th>
+                <th scope="col">最大回撤</th>
+                <th scope="col">最惨时<span class="note">市值/投入</span></th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <ul class="small plan-notes" id="anNotes"></ul>
+      </div>
+    </section>
+
     <section class="block" aria-labelledby="stTitle">
       <div class="section-head">
         <div><h2 id="stTitle">稳妥模式：宽基打底，不择时</h2>
@@ -491,6 +532,58 @@
       </div>
     </section>
 
+    <section class="block" aria-labelledby="jTitle">
+      <div class="section-head">
+        <div><h2 id="jTitle">我的买入记录</h2>
+          <p class="sub">记下每次实际买了多少，算出真实成本、收益，以及有没有按规则执行</p></div>
+      </div>
+      <div class="card">
+        <div class="plan-form">
+          <label class="field">日期<input id="jDate" type="date"></label>
+          <label class="field">买了什么
+            <select id="jAsset"><option value="QQQ">QQQ</option><option value="TQQQ">TQQQ</option><option value="SPY">SPY</option></select>
+          </label>
+          <label class="field">花了多少
+            <span class="unit-input"><span>$</span><input id="jAmount" type="number" min="0" step="10" inputmode="decimal"></span>
+          </label>
+          <label class="field">成交价
+            <span class="unit-input"><span>$</span><input id="jPrice" type="number" min="0" step="0.01" inputmode="decimal"></span>
+          </label>
+          <label class="field">备注（可不填）<input id="jNote" type="text" maxlength="40"></label>
+          <button class="btn primary" id="jAdd" type="button">添加</button>
+        </div>
+        <p class="small" id="jHint"></p>
+        <div id="jResult" hidden>
+          <div class="tiles" id="jTiles"></div>
+          <p class="verdict" id="jVerdict" style="font-size:15px"></p>
+          <div class="table-wrap">
+            <table id="jTable">
+              <thead><tr><th scope="col">日期</th><th scope="col">买了什么</th><th scope="col">金额</th><th scope="col">成交价</th><th scope="col">股数</th><th scope="col">当时规则说</th><th scope="col"></th></tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+        </div>
+        <div class="plan-actions">
+          <button class="btn ghost" id="jBackup" type="button">生成备份</button>
+          <button class="btn ghost" id="jPaste" type="button">粘贴导入</button>
+          <span class="small" id="jMsg"></span>
+        </div>
+        <div id="jBox" hidden>
+          <textarea class="backup" id="jText" rows="8" spellcheck="false"></textarea>
+          <div class="plan-actions">
+            <button class="btn primary" id="jDoImport" type="button" hidden>导入这些记录</button>
+            <button class="btn ghost" id="jCopy" type="button" hidden>复制</button>
+            <a class="btn" id="jMail" href="#" hidden>用邮件发给自己</a>
+            <button class="btn ghost" id="jClose" type="button">关闭</button>
+          </div>
+          <label class="field" id="jMailField" style="margin-top:10px" hidden>备份发到哪个邮箱
+            <input id="jEmail" type="email" inputmode="email" placeholder="you@example.com">
+          </label>
+        </div>
+        <p class="small">记录只存在这台设备的浏览器里，不会上传到 GitHub。换设备或清了浏览器数据就没了——用「生成备份」发一封给自己，以后「粘贴导入」就能恢复。第一个站（纳指100定投）导出的备份也能直接导入。</p>
+      </div>
+    </section>
+
     <section class="block" aria-labelledby="planTitle">
       <div class="section-head">
         <div><h2 id="planTitle">我的资金计划：这次投多少</h2>
@@ -575,6 +668,10 @@
   var PLAN_KEY = "qqq-tqqq-plan-v1";
   var HOLD_KEY = "qqq-tqqq-holdings-v1";
   var STEADY_KEY = "qqq-tqqq-steady-v1";
+  var ANNUAL_KEY = "qqq-tqqq-annual-v1";
+  var TRADES_KEY = "qqq-tqqq-trades-v1";
+  var EMAIL_KEY = "qqq-tqqq-backup-email";
+  var SITE_URL = "https://gini10484-afk.github.io/qqq-tqqq-dca/";
   var state = { series: null, cfg: DCA.withDefaults({}), st: DCA.steadyDefaults({}), meta: null };
   var cache = {};
 
@@ -1282,6 +1379,230 @@
       "睡不着就把 SPY 调高、TQQQ 调低；这些数字在上面随时能改，改完整张表和曲线会跟着重算。");
   }
 
+  // ================= 每年固定投一笔 =================
+  var annual = { amount: 100000, startYear: 0 };
+  var AN_MODES = ["lump", "plainQ", "dip", "steady"];
+
+  function bindAnnual() {
+    try {
+      var v = JSON.parse(localStorage.getItem(ANNUAL_KEY) || "null");
+      if (v && typeof v === "object") {
+        if (v.amount > 0) annual.amount = v.amount;
+        if (v.startYear > 0) annual.startYear = v.startYear;
+      }
+    } catch (e) { /* 忽略 */ }
+    var s = state.series;
+    var first = +s.dates[0].slice(0, 4), last = +s.dates[s.n - 1].slice(0, 4);
+    var sel = $("anYear");
+    sel.textContent = "";
+    for (var y = first; y <= last - 2; y++) {
+      var o = document.createElement("option");
+      o.value = y; o.textContent = y + " 年";
+      sel.appendChild(o);
+    }
+    if (!(annual.startYear >= first && annual.startYear <= last - 2)) annual.startYear = first;
+    sel.value = String(annual.startYear);
+    $("anAmount").value = annual.amount;
+    function read() {
+      annual.amount = Math.max(1, +$("anAmount").value || 0);
+      annual.startYear = +$("anYear").value;
+      try { localStorage.setItem(ANNUAL_KEY, JSON.stringify(annual)); } catch (e) { /* 忽略 */ }
+      renderAnnual();
+    }
+    $("anAmount").addEventListener("change", read);
+    sel.addEventListener("change", read);
+  }
+
+  function renderAnnual() {
+    var s = state.series, cfg = state.cfg;
+    var tb = $("anTable").tBodies[0];
+    tb.textContent = "";
+    var res = [];
+    for (var i = 0; i < AN_MODES.length; i++) {
+      var r = DCA.annualBacktest(s, cfg, {
+        amount: annual.amount, startYear: annual.startYear, mode: AN_MODES[i],
+        steady: state.st, dd: cache.dd, tl: cache.tl,
+      });
+      if (r) res.push(r);
+    }
+    if (!res.length) return;
+    var best = Math.max.apply(null, res.map(function (r) { return r.valueLocal; }));
+    res.forEach(function (r) {
+      var tr = el("tr", r.mode === "dip" ? "em" : null);
+      tr.appendChild(el("td", "label", r.modeName));
+      tr.appendChild(el("td", null, yuan(r.investedLocal)));
+      var tdv = el("td", r.valueLocal === best ? "best" : null, yuan(r.valueLocal));
+      tdv.appendChild(el("span", "note", money(r.value)));
+      tr.appendChild(tdv);
+      tr.appendChild(el("td", null, pct(r.xirrLocal, 2)));
+      tr.appendChild(el("td", null, pct(r.xirrUsd, 2)));
+      tr.appendChild(el("td", null, pctRaw(r.maxDrawdown)));
+      var tdw = el("td", null, (r.worstRatio * 100).toFixed(0) + "%");
+      tdw.appendChild(el("span", "note", cnDate(r.worstRatioDate)));
+      tr.appendChild(tdw);
+      tb.appendChild(tr);
+    });
+    var dip = res.filter(function (r) { return r.mode === "dip"; })[0];
+    var plain = res.filter(function (r) { return r.mode === "plainQ"; })[0];
+    if (dip && plain) {
+      $("anVerdict").textContent = "每年投 " + yuan(annual.amount) + "，从 " + dip.startYear + " 年投到 " +
+        cnDate(dip.endDate) + "：一共投进去 " + yuan(dip.investedLocal) + "，大跌才买 TQQQ 到今天是 " +
+        yuan(dip.valueLocal) + "，只买 QQQ 是 " + yuan(plain.valueLocal) + "。代价是最难熬的时候（" +
+        cnDate(dip.worstRatioDate) + "）账户只剩投入的 " + (dip.worstRatio * 100).toFixed(0) + "%。";
+    }
+    var notes = $("anNotes");
+    notes.textContent = "";
+    function note(t) { notes.appendChild(el("li", null, t)); }
+    note("四种做法每年投的钱一模一样，只是分配不同：大跌才买那套在大跌的周多投、平时少投，年度总额不变。所以这不是靠多投钱赢的。");
+    note("汇率用当年人民币兑美元的年平均价换算，今天按 " + res[0].nowRate + " 折回人民币。人民币这些年升值了，所以人民币年化比美元年化低半个多点。");
+    note("第一年和最后一年通常不是整年，按实际定投次数占一年的比例摊。");
+    note("没算美股分红预扣税（中国居民 10%）、券商佣金和换汇成本，实际到手会比这个数低一点。");
+  }
+
+  // ================= 我的买入记录 =================
+  var trades = [];
+  function saveTrades() {
+    try { localStorage.setItem(TRADES_KEY, JSON.stringify(trades)); } catch (e) { /* 忽略 */ }
+  }
+  function jMsg(t) {
+    $("jMsg").textContent = t || "";
+    if (t) setTimeout(function () { if ($("jMsg").textContent === t) $("jMsg").textContent = ""; }, 4000);
+  }
+  function bindJournal() {
+    try {
+      var v = JSON.parse(localStorage.getItem(TRADES_KEY) || "null");
+      if (Array.isArray(v)) trades = v.filter(function (t) { return t && t.date; });
+    } catch (e) { /* 忽略 */ }
+    var s = state.series;
+    $("jDate").value = s.dates[s.n - 1];
+    $("jAsset").addEventListener("change", fillPrice);
+    $("jDate").addEventListener("change", fillPrice);
+    fillPrice();
+    $("jAdd").addEventListener("click", function () {
+      var d = $("jDate").value, a = +$("jAmount").value, p = +$("jPrice").value;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return jMsg("日期填一下");
+      if (!(a > 0)) return jMsg("金额要大于 0");
+      if (!(p > 0)) return jMsg("成交价要大于 0");
+      trades.push({ id: Date.now() + "-" + Math.random().toString(36).slice(2, 7),
+        date: d, asset: $("jAsset").value, amount: a, price: p, note: $("jNote").value.trim() });
+      saveTrades();
+      $("jAmount").value = ""; $("jNote").value = "";
+      renderJournal();
+      jMsg("加好了");
+    });
+    $("jBackup").addEventListener("click", function () {
+      if (!trades.length) return jMsg("还没有记录");
+      var bk = DCA.formatTradesBackup(trades, { today: new Date().toISOString().slice(0, 10), siteUrl: SITE_URL });
+      $("jText").value = bk.body;
+      $("jBox").hidden = false;
+      $("jDoImport").hidden = true; $("jCopy").hidden = false; $("jMail").hidden = false; $("jMailField").hidden = false;
+      var mail = localStorage.getItem(EMAIL_KEY) || "";
+      $("jEmail").value = mail;
+      $("jMail").href = "mailto:" + encodeURIComponent(mail) + "?subject=" + encodeURIComponent(bk.subject) +
+        "&body=" + encodeURIComponent(bk.body);
+      jMsg("备份生成好了，" + bk.count + " 笔");
+    });
+    $("jEmail").addEventListener("change", function () {
+      var v2 = $("jEmail").value.trim();
+      try { localStorage.setItem(EMAIL_KEY, v2); } catch (e) { /* 忽略 */ }
+      var bk = DCA.formatTradesBackup(trades, { today: new Date().toISOString().slice(0, 10), siteUrl: SITE_URL });
+      $("jMail").href = "mailto:" + encodeURIComponent(v2) + "?subject=" + encodeURIComponent(bk.subject) +
+        "&body=" + encodeURIComponent(bk.body);
+    });
+    $("jPaste").addEventListener("click", function () {
+      $("jText").value = "";
+      $("jText").placeholder = "把备份邮件里的内容整段粘贴到这里（连横线一起）";
+      $("jBox").hidden = false;
+      $("jDoImport").hidden = false; $("jCopy").hidden = true; $("jMail").hidden = true; $("jMailField").hidden = true;
+      $("jText").focus();
+    });
+    $("jDoImport").addEventListener("click", function () {
+      var list;
+      try { list = DCA.parseTradesBackup($("jText").value); }
+      catch (e) { return jMsg("导入失败：" + e.message); }
+      var seen = {};
+      trades.forEach(function (t) { seen[t.date + "|" + DCA.assetOf(t.asset) + "|" + t.amount + "|" + t.price] = 1; });
+      var added = 0;
+      list.forEach(function (t) {
+        if (!t || !/^\d{4}-\d{2}-\d{2}$/.test(String(t.date)) || !(+t.amount > 0) || !(+t.price > 0)) return;
+        var key = t.date + "|" + DCA.assetOf(t.asset) + "|" + (+t.amount) + "|" + (+t.price);
+        if (seen[key]) return;
+        seen[key] = 1; added++;
+        trades.push({ id: Date.now() + "-" + Math.random().toString(36).slice(2, 7),
+          date: t.date, asset: DCA.assetOf(t.asset), amount: +t.amount, price: +t.price, note: t.note || "" });
+      });
+      saveTrades(); renderJournal();
+      $("jBox").hidden = true;
+      jMsg(added ? "导入了 " + added + " 笔（重复的已跳过）" : "没有新记录，可能都已经有了");
+    });
+    $("jCopy").addEventListener("click", function () {
+      $("jText").select();
+      try { document.execCommand("copy"); jMsg("复制好了"); } catch (e) { jMsg("复制失败，手动选中吧"); }
+    });
+    $("jClose").addEventListener("click", function () { $("jBox").hidden = true; });
+  }
+
+  function fillPrice() {
+    var s = state.series, i = s.n - 1;
+    var a = $("jAsset").value;
+    var d = $("jDate").value;
+    // 填的日期在数据范围里就用那天的收盘价，否则用最新收盘价
+    var idx = i;
+    for (var k = 0; k < s.n; k++) if (s.dates[k] === d) { idx = k; break; }
+    var px = a === "TQQQ" ? s.t[idx] : a === "SPY" ? s.spy[idx] : s.close[idx];
+    if (px > 0) $("jPrice").placeholder = px.toFixed(2);
+    var sug = DCA.suggestionForDate(s, state.cfg, d, { dd: cache.dd, tl: cache.tl });
+    $("jHint").textContent = sug
+      ? "按 " + cnDate(sug.basedOn) + " 收盘判断，" + cnDate(sug.date) + " 规则说：投 " + money(sug.amount, true) +
+        " 买 " + sug.asset + "（" + sug.multiplier + " 倍，离最高点跌了 " + pctRaw(sug.drawdown) + "）。成交价不填就按收盘价算。"
+      : "成交价不填就按当天收盘价算。";
+  }
+
+  function renderJournal() {
+    var s = state.series;
+    var r = DCA.summarizeTrades(s, state.cfg, trades);
+    $("jResult").hidden = !r.count;
+    fillPrice();
+    if (!r.count) return;
+    var tiles = $("jTiles");
+    tiles.textContent = "";
+    tileInto(tiles, "一共投入", money(r.invested), r.count + " 笔");
+    tileInto(tiles, "现在值", money(r.value), (r.profit >= 0 ? "赚 " : "亏 ") + money(Math.abs(r.profit)));
+    tileInto(tiles, "总收益率", pct(r.totalReturn, 1, true), isFinite(r.xirr) ? "年化 " + pct(r.xirr, 2) : "");
+    tileInto(tiles, "TQQQ 占比", r.tqqqShare.toFixed(1) + "%", "上限 " + state.cfg.tqqqCap + "%");
+    $("jVerdict").textContent = "持仓：" + r.holdings.map(function (h) {
+      return h.asset + " " + h.shares.toFixed(3) + " 股（均价 " + money(h.avgCost, true) + "，现值 " + money(h.value) + "）";
+    }).join("；") + "。" + (r.compared
+      ? " 这些记录里有 " + r.sameAsset + "/" + r.compared + " 笔买的标的和规则一致，" + r.followed + "/" + r.compared + " 笔金额也差不多。"
+      : "");
+    var tb = $("jTable").tBodies[0];
+    tb.textContent = "";
+    r.rows.slice().reverse().forEach(function (row) {
+      var tr = el("tr");
+      tr.appendChild(el("td", "label", cnDate(row.date)));
+      var td1 = el("td");
+      var tag = el("span", "tag " + (row.asset === "TQQQ" ? "t" : row.asset === "SPY" ? "s" : "q"), row.asset);
+      td1.appendChild(tag);
+      if (row.note) td1.appendChild(el("span", "note", row.note));
+      tr.appendChild(td1);
+      tr.appendChild(el("td", null, money(row.amount, true)));
+      tr.appendChild(el("td", null, money(row.price, true)));
+      tr.appendChild(el("td", null, row.shares.toFixed(3)));
+      tr.appendChild(el("td", null, row.suggested == null ? "—"
+        : money(row.suggested, true) + " 买 " + row.suggestedAsset));
+      var tdx = el("td");
+      var del = el("button", "link-btn", "删掉");
+      del.type = "button";
+      del.addEventListener("click", function () {
+        trades = trades.filter(function (t) { return t.id !== row.id; });
+        saveTrades(); renderJournal(); jMsg("删掉了");
+      });
+      tdx.appendChild(del);
+      tr.appendChild(tdx);
+      tb.appendChild(tr);
+    });
+  }
+
   // ================= 我的持仓 =================
   var holding = { spyShares: "", qqqShares: "", tqqqShares: "" };
   function loadHold() {
@@ -1426,7 +1747,9 @@
     renderSteady();
     renderRolling();
     renderFacts();
+    renderAnnual();
     renderHold();
+    renderJournal();
     renderPlan();
   }
 
@@ -1477,7 +1800,9 @@
     loadSteady();
     fillSteady();
     bindSteady();
+    bindAnnual();
     bindHold();
+    bindJournal();
     bindPlan();
     $("app").hidden = false;
     renderAll();
