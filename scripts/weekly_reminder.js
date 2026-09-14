@@ -72,6 +72,19 @@ function buildReminder(data, opts) {
   if (cfg.sellOnRecover && tl.ok[i] && tl.dev[i] >= 0) {
     lines.push("> 你开了「涨回均线就换回 QQQ」：现在在均线上方，手里的 TQQQ 该换成 QQQ。");
   }
+  if (series.hasSpy) {
+    const st = DCA.steadyDefaults({});
+    const base = cfg.baseAmount;
+    const parts = [
+      `SPY ${fmtMoney(base * st.coreWeight / 100)}`,
+      `QQQ ${fmtMoney(base * st.qqqWeight / 100)}`,
+      `TQQQ ${fmtMoney(base * st.tqqqWeight / 100)}`,
+    ];
+    lines.push("");
+    lines.push(`如果你走的是**稳妥模式**（${Math.round(st.coreWeight)}/${Math.round(st.qqqWeight)}/${Math.round(st.tqqqWeight)}）：` +
+      `这次就投 ${fmtMoney(base)}，不加码，分成 ${parts.join(" · ")}。` +
+      `实际下单前在网站上按你自己的持仓算一下，缺得多的那层会多分一点。`);
+  }
   lines.push("");
   lines.push(`美股开盘：北京时间 21:30（夏令时）/ 22:30（冬令时）。`);
   if (opts.owner && opts.repo) {
