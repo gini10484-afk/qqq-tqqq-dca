@@ -45,7 +45,10 @@ function buildReminder(data, opts) {
   const toT = r.buyTqqq ? amount * cfg.flowShare / 100 : 0;
 
   const dateCn = today.slice(5, 7).replace(/^0/, "") + "月" + today.slice(8, 10).replace(/^0/, "") + "日";
-  const title = `${dateCn}（${DCA.WEEKDAY_CN[wd]}）：投 ${fmtMoney(amount)} 买 ${asset}（×${r.multiplier}）`;
+  let title = `${dateCn}（${DCA.WEEKDAY_CN[wd]}）：投 ${fmtMoney(amount)} 买 ${asset}（×${r.multiplier}）`;
+
+  const sellNow = DCA.sellTargetFor(cfg, dd, tl, i) !== null && cfg.sellMode !== "none";
+  if (sellNow) title += " ⚠️ 该减 TQQQ";
 
   const lines = [];
   lines.push(`## 这次投 ${fmtMoney(amount)}，买 **${asset}**`);
@@ -60,6 +63,29 @@ function buildReminder(data, opts) {
     lines.push(`- ${cfg.maWindow} 日均线 ${fmtMoney(tl.ma[i])}，现价比它` +
       (tl.dev[i] < 0 ? `低 ${fmtPct(-tl.dev[i])}（下跌趋势）` : `高 ${fmtPct(tl.dev[i])}`));
   }
+  // 离「买 TQQQ」还差多少 / 要不要卖
+  const st = DCA.currentStatus(series, cfg, null, { dd: dd, tl: tl });
+  lines.push("");
+  lines.push("### 买 TQQQ 的两个条件");
+  lines.push(`- ${st.gap.belowMA ? "✅" : "⬜️"} 跌破 ${cfg.maWindow} 日均线：` +
+    (st.gap.maGap == null ? "均线数据还不够"
+      : st.gap.belowMA ? `已经在均线下方 ${fmtPct(-st.gap.maGap)}`
+      : `现在比均线高 ${fmtPct(st.gap.maGap)}，还要再跌这么多才到`));
+  lines.push(`- ${st.gap.deepEnough ? "✅" : "⬜️"} 离${cfg.basis === "ath" ? "历史" : "近一年"}最高点跌 ≥ ${cfg.dipThreshold}%：` +
+    (st.gap.deepEnough ? `已经跌了 ${fmtPct(st.gap.ddNow)}`
+      : `现在跌了 ${fmtPct(st.gap.ddNow)}，还差 ${fmtPct(st.gap.ddGap)}`));
+  lines.push("");
+  lines.push("### 要不要卖 TQQQ");
+  if (cfg.sellMode === "none") {
+    lines.push("你把规则设成了「完全不卖」，连占比上限也不管。TQQQ 会一直累积，风险自负。");
+  } else if (st.sell.triggered) {
+    lines.push(`**该减 TQQQ 了。** ${st.sell.note}`);
+    lines.push("具体卖几股要按你自己的持仓算——打开网站，在「我的持仓」填上股数，提醒区会直接给出数字。");
+  } else {
+    lines.push(`暂时不用卖。${st.sell.note}`);
+    lines.push(`（当前规则：${DCA.SELL_NAMES[cfg.sellMode]}）`);
+  }
+
   lines.push("");
   if (r.buyTqqq) {
     lines.push(`> 回撤已经到了 ${cfg.dipThreshold}% 的门槛，按规则这次买 TQQQ。`);
