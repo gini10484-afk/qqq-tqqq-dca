@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""拉 QQQ 和 TQQQ 的历史行情，检查一遍，写进 docs/data.json。
+"""拉 QQQ、TQQQ、SPY 的历史行情，检查一遍，写进 docs/data.json。
 
 TQQQ 2010-02-11 才成立，之前的部分用「QQQ 日涨跌 ×3 − 杠杆成本」模拟。
 模拟公式里的系数是用 2010 年之后的真实数据拟合出来的（见 README），
 16 年半的复利误差约 4.5%。模拟出来的那段在 data.json 里标成 real=0，网页会提示。
 
-data.json 的每一行是：[日期, QQQ 收盘价, QQQ 复权价, TQQQ 复权价, 是否真实(1/0)]
+SPY（标普500）是 1993 年就有的真实数据，稳妥模式拿它当核心打底，不需要模拟。
+
+data.json 的每一行是：
+[日期, QQQ 收盘价, QQQ 复权价, TQQQ 复权价, TQQQ 是否真实(1/0), SPY 复权价]
 """
 
 import json
@@ -137,35 +140,46 @@ def simulate_tqqq(qqq_rows, real_by_date, first_real_date):
 def build():
     qqq = fetch("QQQ")
     tqqq = fetch("TQQQ")
+    spy = fetch("SPY")
     sanity(qqq, "QQQ")
     sanity(tqqq, "TQQQ")
+    sanity(spy, "SPY")
 
-    q_by_date = {d: (c, a) for d, c, a in qqq}
     t_by_date = {d: a for d, _c, a in tqqq}
+    s_by_date = {d: a for d, _c, a in spy}
     first_real = tqqq[0][0]
 
     sim = simulate_tqqq(qqq, t_by_date, first_real)
     sim_by_date = {d: v for d, v, _ in sim}
 
     rows = []
+    missing_spy = 0
     for day, close, adj in qqq:
         if day in t_by_date:
-            rows.append([day, round(close, 4), round(adj, 6), round(t_by_date[day], 6), 1])
+            t, real = t_by_date[day], 1
         elif day in sim_by_date:
-            rows.append([day, round(close, 4), round(adj, 6), round(sim_by_date[day], 6), 0])
-        # QQQ 有而 TQQQ 两边都没有的日子（极少）直接跳过，保证两条线对齐
+            t, real = sim_by_date[day], 0
+        else:
+            continue  # QQQ 有而 TQQQ 两边都没有的日子（极少）直接跳过，保证几条线对齐
+        sp = s_by_date.get(day)
+        if sp is None:
+            missing_spy += 1
+            continue
+        rows.append([day, round(close, 4), round(adj, 6), round(t, 6), real, round(sp, 6)])
 
     if len(rows) < 1000:
         raise RuntimeError("合并后只剩 %d 行，放弃这次更新" % len(rows))
+    if missing_spy > 5:
+        raise RuntimeError("有 %d 个交易日拿不到 SPY，放弃这次更新" % missing_spy)
 
     payload = {
-        "symbol": "QQQ+TQQQ",
+        "symbol": "QQQ+TQQQ+SPY",
         "source": "Yahoo Finance",
         "updated": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
         "firstRealTqqq": first_real,
         "fedFunds": FED_FUNDS,
         "drift": {"a": DRIFT_A, "b": DRIFT_B},
-        "cols": ["date", "qqqClose", "qqqAdj", "tqqqAdj", "tqqqReal"],
+        "cols": ["date", "qqqClose", "qqqAdj", "tqqqAdj", "tqqqReal", "spyAdj"],
         "rows": rows,
     }
 
