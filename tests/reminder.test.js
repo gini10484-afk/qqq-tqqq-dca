@@ -84,3 +84,33 @@ test("提醒里写明这不是投资建议", () => {
   const r = buildReminder(makeData(100), { today: "2026-09-14", config: CFG });
   assert.match(r.body, /不是投资建议/);
 });
+
+// 一段横盘的行情，第三个参数决定要不要带 SPY 列
+function flat(withSpy) {
+  const rows = [];
+  let d = DCA.dayNumber("2026-03-02");
+  for (let i = 0; i < 300; i++) {
+    while (DCA.weekdayOf(d) < 1 || DCA.weekdayOf(d) > 5) d++;
+    const row = [DCA.dateFromDayNumber(d), 100, 100, 100, 1];
+    if (withSpy) row.push(100);
+    rows.push(row);
+    d++;
+  }
+  return { rows };
+}
+
+test("有 SPY 数据时，提醒里会带上稳妥模式的分法", () => {
+  const data = flat(true);
+  const out = buildReminder(data, { today: data.rows[data.rows.length - 1][0], force: true });
+  assert.equal(out.skip, false);
+  assert.match(out.body, /稳妥模式/);
+  assert.match(out.body, /SPY \$60\.00/);
+  assert.match(out.body, /TQQQ \$10\.00/);
+});
+
+test("没有 SPY 数据时，提醒里不提稳妥模式", () => {
+  const data = flat(false);
+  const out = buildReminder(data, { today: data.rows[data.rows.length - 1][0], force: true });
+  assert.equal(out.skip, false);
+  assert.ok(!/稳妥模式/.test(out.body));
+});
