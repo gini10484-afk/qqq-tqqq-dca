@@ -14,14 +14,16 @@ function tradingDays(start, count) {
   }
   return out;
 }
-// qs: QQQ 价格；ts: TQQQ 价格（不给就按 3 倍日涨跌推）
-function series(dates, qs, ts) {
+// qs: QQQ 价格；ts: TQQQ 价格（不给就按 3 倍日涨跌推）；sps: SPY 价格（不给就没有 SPY 列）
+function series(dates, qs, ts, sps) {
   const rows = dates.map((d, i) => {
     let t;
     if (ts) t = ts[i];
     else if (i === 0) t = 100;
     else t = null;
-    return [d, qs[i], qs[i], t, 1];
+    const row = [d, qs[i], qs[i], t, 1];
+    if (sps) row.push(sps[i]);
+    return row;
   });
   if (!ts) {
     for (let i = 1; i < rows.length; i++) {
@@ -246,4 +248,103 @@ test("默认设置就是「大跌才买 TQQQ + 上限」", () => {
   assert.equal(d.sellOnRecover, false);
   assert.equal(d.basis, "52w");
   assert.equal(d.maWindow, 200);
+});
+
+// ---------- 稳妥模式 ----------
+
+test("稳妥模式：三个权重会自动凑成 100%", () => {
+  const a = DCA.steadyDefaults({ coreWeight: 6, qqqWeight: 3, tqqqWeight: 1 });
+  close(a.coreWeight, 60);
+  close(a.qqqWeight, 30);
+  close(a.tqqqWeight, 10);
+  // 全填 0 就退回默认
+  const b = DCA.steadyDefaults({ coreWeight: 0, qqqWeight: 0, tqqqWeight: 0 });
+  close(b.coreWeight, DCA.STEADY_DEFAULT.coreWeight);
+  // 再平衡方式只认这三种
+  assert.equal(DCA.steadyDefaults({ rebalance: "什么" }).rebalance, "yearly");
+  assert.equal(DCA.steadyDefaults({ rebalance: "band" }).rebalance, "band");
+});
+
+test("新钱先补最落后的那一层", () => {
+  const w = [0.6, 0.3, 0.1];
+  // 什么都没有时按目标配比分
+  const a = DCA.steadyAlloc([0, 0, 0], w, 100);
+  close(a[0], 60); close(a[1], 30); close(a[2], 10);
+  // 已经有 100 块核心，再投 100：补完正好是目标配比，一股都不用卖
+  const b = DCA.steadyAlloc([100, 0, 0], w, 100);
+  close(b[0], 20); close(b[1], 60); close(b[2], 20);
+  close(100 + b[0], 0.6 * 200);
+  // 缺口比新钱还小时，多出来的按目标配比分
+  const c = DCA.steadyAlloc([0, 30, 10], w, 60);
+  close(c[0] + c[1] + c[2], 60);
+  close(c[0], 60); // 核心缺 60，正好用完
+});
+
+test("再平衡：卖超配、买低配，并且扣掉点差", () => {
+  const sh = [1, 1, 1], px = [100, 100, 100], w = [0.6, 0.3, 0.1];
+  const r = DCA.steadyRebalance(sh, px, w);
+  close(r.turnover, 80);
+  close(r.fee, 80 * DCA.FEE);
+  close(sh[1] * px[1], 90);
+  close(sh[2] * px[2], 30);
+  close(sh[0] * px[0], 100 + 80 - 80 * DCA.FEE);
+  // 已经就是目标配比时什么都不做
+  const sh2 = [6, 3, 1], r2 = DCA.steadyRebalance(sh2, [10, 10, 10], w);
+  close(r2.turnover, 0);
+  close(r2.fee, 0);
+});
+
+test("稳妥模式回测：金额固定、配比就是目标配比", () => {
+  const d = tradingDays("2020-01-06", 300);
+  const flat = d.map(() => 100);
+  const s = series(d, flat, flat, flat);
+  assert.equal(s.hasSpy, true);
+  const r = DCA.steadyBacktest(s, { baseAmount: 100, investWeekday: 1 }, { coreWeight: 60, qqqWeight: 30, tqqqWeight: 10 });
+  // 价格一直不动：投多少就还是多少，也不会触发再平衡
+  close(r.invested, r.times * 100, 1e-6);
+  close(r.value, r.invested, 1e-6);
+  close(r.feePaid, 0);
+  close(r.coreShare, 60, 1e-6);
+  close(r.tqqqShare, 10, 1e-6);
+  // 每次金额都一样，不像综合策略那样加码
+  const combo = DCA.backtest(s, { baseAmount: 100, investWeekday: 1 }, { mode: "comboQ" });
+  assert.equal(r.times, combo.times);
+});
+
+test("稳妥模式：没有 SPY 数据就返回 null", () => {
+  const d = tradingDays("2020-01-06", 60);
+  const s = series(d, d.map(() => 100));
+  assert.equal(s.hasSpy, false);
+  assert.equal(DCA.steadyBacktest(s, {}, {}), null);
+  assert.equal(DCA.steadyPlan(s, {}, {}, 100), null);
+});
+
+test("稳妥模式：不再平衡时杠杆那层会越涨越多", () => {
+  const d = tradingDays("2020-01-06", 400);
+  const qs = d.map((_, i) => ramp(i));
+  const sps = d.map(() => 100); // 核心不动，QQQ 先跌后大涨，TQQQ 是它的 3 倍
+  const s = series(d, qs, null, sps);
+  const cfg = { baseAmount: 100, investWeekday: 1 };
+  const w = { coreWeight: 60, qqqWeight: 30, tqqqWeight: 10 };
+  const never = DCA.steadyBacktest(s, cfg, Object.assign({}, w, { rebalance: "never" }));
+  const yearly = DCA.steadyBacktest(s, cfg, Object.assign({}, w, { rebalance: "yearly" }));
+  assert.equal(never.rebalances, 0);
+  assert.ok(yearly.rebalances > 0, "每年再平衡应该真的动过手");
+  assert.ok(never.tqqqShare > yearly.tqqqShare,
+    `不卖的话 TQQQ 占比应该更高：${never.tqqqShare} vs ${yearly.tqqqShare}`);
+  assert.ok(yearly.feePaid > 0 && never.feePaid === 0);
+});
+
+test("稳妥模式：这次的钱怎么分", () => {
+  const d = tradingDays("2020-01-06", 300);
+  const flat = d.map(() => 100);
+  const s = series(d, flat, flat, flat);
+  // 手里只有核心，这次的钱应该几乎都去补 QQQ 和 TQQQ
+  const p = DCA.steadyPlan(s, { coreWeight: 60, qqqWeight: 30, tqqqWeight: 10 }, { spyShares: 1 }, 100);
+  close(p.total, 100);
+  close(p.buy[0] + p.buy[1] + p.buy[2], 100);
+  assert.ok(p.buy[1] > p.buy[0], "QQQ 缺得更多，应该分到更多钱");
+  close(p.weightsAfter[0], 60, 1e-6);
+  close(p.weightsAfter[1], 30, 1e-6);
+  close(p.weightsAfter[2], 10, 1e-6);
 });
