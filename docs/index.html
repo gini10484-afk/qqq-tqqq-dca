@@ -18,6 +18,7 @@
     --s-combo: #2a78d6;    /* 综合策略·只买 QQQ */
     --s-fixed: #1baf7a;    /* 每次固定比例买 TQQQ */
     --s-dip: #eb6834;      /* 大跌才买 TQQQ（本站主角） */
+    --s-steady: #4a3aa7;   /* 稳妥模式·宽基打底 */
     --ramp-1: #86b6ef; --ramp-2: #5598e7; --ramp-3: #2a78d6; --ramp-4: #1c5cab; --ramp-5: #0d366b;
     --zone: rgba(235, 104, 52, 0.13);
     --warn-bg: #fdf3dc; --warn-border: #f0d58f; --warn-ink: #5c4200; --warn-icon: #fab219;
@@ -30,7 +31,7 @@
       --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
       --grid: #2c2c2a; --axis: #383835; --border: rgba(255, 255, 255, 0.10);
       --accent: #3987e5; --accent-ink: #86b6ef; --focus: #6da7ec;
-      --s-qqq: #a3a29b; --s-combo: #3987e5; --s-fixed: #199e70; --s-dip: #d95926;
+      --s-qqq: #a3a29b; --s-combo: #3987e5; --s-fixed: #199e70; --s-dip: #d95926; --s-steady: #9085e9;
       --ramp-1: #184f95; --ramp-2: #2a78d6; --ramp-3: #5598e7; --ramp-4: #86b6ef; --ramp-5: #b7d3f6;
       --zone: rgba(217, 89, 38, 0.20);
       --warn-bg: #2b2411; --warn-border: #5a4a1c; --warn-ink: #f3dfa8; --warn-icon: #fab219;
@@ -43,7 +44,7 @@
     --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
     --grid: #2c2c2a; --axis: #383835; --border: rgba(255, 255, 255, 0.10);
     --accent: #3987e5; --accent-ink: #86b6ef; --focus: #6da7ec;
-    --s-qqq: #a3a29b; --s-combo: #3987e5; --s-fixed: #199e70; --s-dip: #d95926;
+    --s-qqq: #a3a29b; --s-combo: #3987e5; --s-fixed: #199e70; --s-dip: #d95926; --s-steady: #9085e9;
     --ramp-1: #184f95; --ramp-2: #2a78d6; --ramp-3: #5598e7; --ramp-4: #86b6ef; --ramp-5: #b7d3f6;
     --zone: rgba(217, 89, 38, 0.20);
     --warn-bg: #2b2411; --warn-border: #5a4a1c; --warn-ink: #f3dfa8; --warn-icon: #fab219;
@@ -188,6 +189,7 @@
   .bar-track i { display: block; height: 100%; }
   .bar-track .q { background: var(--s-combo); }
   .bar-track .t { background: var(--s-dip); }
+  .bar-track .c { background: var(--s-steady); }
   .bar-track .cap { width: 2px; background: var(--ink); }
 
   code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.92em; background: var(--surface-2); padding: 1px 5px; border-radius: 5px; }
@@ -302,7 +304,7 @@
 
     <section class="block" aria-labelledby="btTitle">
       <div class="section-head">
-        <div><h2 id="btTitle">四种做法一起回测</h2>
+        <div><h2 id="btTitle">五种做法一起回测</h2>
           <p class="sub">每次都投同样的基础金额，按各自规则加码，从 <span id="btStart">—</span> 投到 <span id="btEnd">—</span></p></div>
         <label class="field" style="flex-direction:row;align-items:center;gap:8px">从哪年开始
           <select id="btYear"></select>
@@ -327,12 +329,63 @@
       <div class="card" style="margin-top:14px">
         <div class="legend" id="curveLegend"></div>
         <div class="chart" id="curveChart"></div>
-        <p class="small">纵轴是「市值 ÷ 已投入的钱」，1 倍就是不赚不亏。用这个比看绝对金额公平，因为四种做法投进去的钱不一样多。</p>
+        <p class="small">纵轴是「市值 ÷ 已投入的钱」，1 倍就是不赚不亏。用这个比看绝对金额公平，因为几种做法投进去的钱不一样多。</p>
       </div>
       <div class="card" style="margin-top:14px">
         <div class="legend"><span><i class="key area" style="background:var(--s-dip)"></i>TQQQ 占组合的比例（大跌才买）</span><span><i class="key" style="background:var(--ink-2)"></i>你设的上限</span></div>
         <div class="chart" id="shareChart"></div>
         <p class="small" id="shareNote"></p>
+      </div>
+    </section>
+
+    <section class="block" aria-labelledby="stTitle">
+      <div class="section-head">
+        <div><h2 id="stTitle">稳妥模式：宽基打底，不择时</h2>
+          <p class="sub">不看行情、不加码，每次都投一样多，按固定配比分给三层，定期再平衡</p></div>
+      </div>
+      <div class="card" id="stNoData" hidden>
+        <p>行情数据里还没有 SPY，稳妥模式要等下一次自动更新（每个交易日收盘后）才能算。</p>
+      </div>
+      <div id="stWrap" hidden>
+        <div class="card">
+          <div class="plan-form">
+            <label class="field">SPY 标普500<span class="note">核心打底</span>
+              <span class="unit-input"><input id="stCore" class="narrow" type="number" min="0" max="100" step="5" inputmode="decimal"><span>%</span></span>
+            </label>
+            <label class="field">QQQ 纳指100<span class="note">成长卫星</span>
+              <span class="unit-input"><input id="stQ" class="narrow" type="number" min="0" max="100" step="5" inputmode="decimal"><span>%</span></span>
+            </label>
+            <label class="field">TQQQ<span class="note">杠杆</span>
+              <span class="unit-input"><input id="stT" class="narrow" type="number" min="0" max="100" step="5" inputmode="decimal"><span>%</span></span>
+            </label>
+            <label class="field">多久再平衡一次
+              <select id="stReb">
+                <option value="yearly">每年一次</option>
+                <option value="band">偏离超过阈值才动</option>
+                <option value="never">只用新钱补，从不卖</option>
+              </select>
+            </label>
+            <label class="field" id="stBandField">偏离多少才动
+              <span class="unit-input"><input id="stBand" class="narrow" type="number" min="1" max="30" step="1" inputmode="decimal"><span>个点</span></span>
+            </label>
+            <button class="btn ghost" id="stReset" type="button">恢复 60 / 30 / 10</button>
+          </div>
+          <p class="small" id="stWeightNote"></p>
+        </div>
+        <div class="card" style="margin-top:14px">
+          <p class="verdict" id="stVerdict" style="font-size:15px"></p>
+          <div class="tiles" id="stTiles"></div>
+          <div class="bar-track" id="stBar"></div>
+          <p class="small" id="stBarNote"></p>
+        </div>
+        <div class="card" style="margin-top:14px">
+          <div class="legend"><span><i class="key" style="background:var(--s-steady)"></i>这次的 <b id="stAmt">—</b> 怎么分</span></div>
+          <div class="tiles" id="stPlanTiles"></div>
+          <p class="small" id="stPlanNote"></p>
+        </div>
+        <div class="card" style="margin-top:14px">
+          <ul class="facts" id="stFacts"></ul>
+        </div>
       </div>
     </section>
 
@@ -364,6 +417,9 @@
       </div>
       <div class="card">
         <div class="plan-form">
+          <label class="field">SPY 股数
+            <span class="unit-input"><input id="hS" type="number" min="0" step="0.01" inputmode="decimal"><span>股</span></span>
+          </label>
           <label class="field">QQQ 股数
             <span class="unit-input"><input id="hQ" type="number" min="0" step="0.01" inputmode="decimal"><span>股</span></span>
           </label>
@@ -376,7 +432,7 @@
           <div class="tiles" id="holdTiles"></div>
           <p class="verdict" id="holdVerdict" style="font-size:15px"></p>
         </div>
-        <p class="small">股数只存在你自己的浏览器里，不会上传到 GitHub（这个仓库是公开的）。价格用最新收盘价，只是估算。</p>
+        <p class="small">股数只存在你自己的浏览器里，不会上传到 GitHub（这个仓库是公开的）。价格用最新收盘价，只是估算。上面的占比和上限只看 QQQ 和 TQQQ；SPY 股数是给下面的稳妥模式用的。</p>
       </div>
     </section>
 
@@ -463,7 +519,8 @@
   var CFG_KEY = "qqq-tqqq-config-v1";
   var PLAN_KEY = "qqq-tqqq-plan-v1";
   var HOLD_KEY = "qqq-tqqq-holdings-v1";
-  var state = { series: null, cfg: DCA.withDefaults({}), meta: null };
+  var STEADY_KEY = "qqq-tqqq-steady-v1";
+  var state = { series: null, cfg: DCA.withDefaults({}), st: DCA.steadyDefaults({}), meta: null };
   var cache = {};
 
   function loadCfg() {
@@ -474,6 +531,28 @@
   }
   function saveCfg() {
     try { localStorage.setItem(CFG_KEY, JSON.stringify(state.cfg)); } catch (e) { /* 忽略 */ }
+  }
+  // 输入框里放原始数字（比如 60/30/10），算的时候再归一到 100
+  var stRaw = {
+    coreWeight: DCA.STEADY_DEFAULT.coreWeight,
+    qqqWeight: DCA.STEADY_DEFAULT.qqqWeight,
+    tqqqWeight: DCA.STEADY_DEFAULT.tqqqWeight,
+    rebalance: DCA.STEADY_DEFAULT.rebalance,
+    band: DCA.STEADY_DEFAULT.band,
+  };
+  function loadSteady() {
+    try {
+      var v = JSON.parse(localStorage.getItem(STEADY_KEY) || "null");
+      if (v && typeof v === "object") {
+        ["coreWeight", "qqqWeight", "tqqqWeight", "rebalance", "band"].forEach(function (k) {
+          if (v[k] != null) stRaw[k] = v[k];
+        });
+      }
+    } catch (e) { /* 存不了就用默认 */ }
+    state.st = DCA.steadyDefaults(stRaw);
+  }
+  function saveSteady() {
+    try { localStorage.setItem(STEADY_KEY, JSON.stringify(stRaw)); } catch (e) { /* 忽略 */ }
   }
 
   function isDaily() { return state.cfg.frequency === "daily"; }
@@ -672,12 +751,15 @@
     { key: "comboQ", name: "综合策略（只买 QQQ）", color: "var(--s-combo)" },
     { key: "fixed", name: "每次固定 20% 买 TQQQ", color: "var(--s-fixed)" },
     { key: "dip", name: "大跌才买 TQQQ（本站规则）", color: "var(--s-dip)" },
+    { key: "steady", name: "稳妥模式（宽基打底）", color: "var(--s-steady)" },
   ];
 
   function renderBacktest() {
     var s = state.series, cfg = state.cfg;
     var start = $("btYear").value;
     var res = DCA.compareModes(s, cfg, { startDate: start + "-01-01", fixedShare: 20 });
+    cache.steady = DCA.steadyBacktest(s, cfg, state.st, { startDate: start + "-01-01" });
+    if (cache.steady) res = res.concat([cache.steady]);
     cache.bt = res;
     if (!res.length) return;
     $("btStart").textContent = cnDate(res[0].startDate);
@@ -687,7 +769,7 @@
     var bestX = Math.max.apply(null, res.map(function (r) { return r.xirr; }));
     res.forEach(function (r, i) {
       var m = MODES[i];
-      var tr = el("tr", r.mode === "dip" ? "em" : null);
+      var tr = el("tr", (r.mode === "dip" || r.mode === "steady") ? "em" : null);
       var td0 = el("td", "label");
       td0.appendChild(svgKey(m.color));
       td0.appendChild(document.createTextNode(" " + m.name));
@@ -752,7 +834,7 @@
     res.forEach(function (r, mi) {
       var d = "";
       for (var i = 0; i < r.ratio.length; i++) d += (i ? "L" : "M") + x(i).toFixed(1) + " " + y(r.ratio[i]).toFixed(1);
-      box.svg.appendChild(svgEl("path", { d: d, fill: "none", stroke: MODES[mi].color, "stroke-width": r.mode === "dip" ? 2.2 : 1.5 }));
+      box.svg.appendChild(svgEl("path", { d: d, fill: "none", stroke: MODES[mi].color, "stroke-width": (r.mode === "dip" || r.mode === "steady") ? 2.2 : 1.5 }));
       ends.push({ y: y(r.ratio[r.ratio.length - 1]), text: r.ratio[r.ratio.length - 1].toFixed(1) + "x", color: MODES[mi].color });
     });
     ends.sort(function (a, b) { return a.y - b.y; });
@@ -773,7 +855,7 @@
     box.svg.appendChild(svgEl("line", { x1: L, x2: w - R, y1: T + ih, y2: T + ih, class: "axis" }));
     var lg = $("curveLegend");
     lg.textContent = "";
-    MODES.forEach(function (m) {
+    MODES.slice(0, res.length).forEach(function (m) {
       var sp = el("span");
       sp.appendChild(svgKey(m.color));
       sp.appendChild(document.createTextNode(m.name));
@@ -885,24 +967,196 @@
       "1999 年以来 QQQ 涨了 " + times(s.adj[s.n - 1] / s.adj[0]) + "。以后不一定还有这样的回报，回测数字不是收益承诺。");
   }
 
+  // ================= 稳妥模式 =================
+  var ASSETS = [
+    { key: "core", name: "SPY", full: "标普500", color: "var(--s-steady)", cls: "c" },
+    { key: "qqq", name: "QQQ", full: "纳指100", color: "var(--s-combo)", cls: "q" },
+    { key: "tqqq", name: "TQQQ", full: "3 倍杠杆", color: "var(--s-dip)", cls: "t" },
+  ];
+
+  function fillSteady() {
+    $("stCore").value = stRaw.coreWeight;
+    $("stQ").value = stRaw.qqqWeight;
+    $("stT").value = stRaw.tqqqWeight;
+    $("stReb").value = stRaw.rebalance;
+    $("stBand").value = stRaw.band;
+  }
+  function bindSteady() {
+    function read() {
+      stRaw.coreWeight = +$("stCore").value;
+      stRaw.qqqWeight = +$("stQ").value;
+      stRaw.tqqqWeight = +$("stT").value;
+      stRaw.rebalance = $("stReb").value;
+      stRaw.band = +$("stBand").value;
+      state.st = DCA.steadyDefaults(stRaw);
+      saveSteady();
+      renderBacktest();
+      renderSteady();
+    }
+    ["stCore", "stQ", "stT", "stBand"].forEach(function (id) { $(id).addEventListener("change", read); });
+    $("stReb").addEventListener("change", read);
+    $("stReset").addEventListener("click", function () {
+      stRaw.coreWeight = DCA.STEADY_DEFAULT.coreWeight;
+      stRaw.qqqWeight = DCA.STEADY_DEFAULT.qqqWeight;
+      stRaw.tqqqWeight = DCA.STEADY_DEFAULT.tqqqWeight;
+      stRaw.rebalance = DCA.STEADY_DEFAULT.rebalance;
+      stRaw.band = DCA.STEADY_DEFAULT.band;
+      fillSteady();
+      read();
+    });
+  }
+
+  function tileInto(host, label, value, sub) {
+    var t = el("div", "tile");
+    t.appendChild(el("div", "t-label", label));
+    t.appendChild(el("div", "t-value", value));
+    if (sub) t.appendChild(el("div", "t-sub", sub));
+    host.appendChild(t);
+    return t;
+  }
+
+  function renderSteady() {
+    var s = state.series, has = !!s.hasSpy;
+    $("stNoData").hidden = has;
+    $("stWrap").hidden = !has;
+    if (!has) return;
+    var st = state.st, r = cache.steady;
+    $("stBandField").hidden = st.rebalance !== "band";
+    $("stWeightNote").textContent = "实际用的配比：SPY " + st.coreWeight.toFixed(1) + "% · QQQ " +
+      st.qqqWeight.toFixed(1) + "% · TQQQ " + st.tqqqWeight.toFixed(1) +
+      "%（三个数会自动按比例凑成 100%）。再平衡：" + DCA.REBALANCE_NAMES[st.rebalance] +
+      (st.rebalance === "band" ? "，某一层偏离目标 " + st.band + " 个百分点就动一次" : "") +
+      "。换仓成本按 0.05% 的点差估。";
+    if (!r) return;
+
+    var byMode = {};
+    (cache.bt || []).forEach(function (x) { byMode[x.mode] = x; });
+    var plain = byMode.plainQ, dip = byMode.dip;
+
+    var tiles = $("stTiles");
+    tiles.textContent = "";
+    tileInto(tiles, "年化", pct(r.xirr, 2),
+      plain ? (r.xirr >= plain.xirr ? "比只买 QQQ 高 " : "比只买 QQQ 低 ") + Math.abs((r.xirr - plain.xirr) * 100).toFixed(2) + " 个点" : null);
+    tileInto(tiles, "最大回撤", pctRaw(r.maxDrawdown),
+      plain ? "只买 QQQ 是 " + pctRaw(plain.maxDrawdown) : cnDate(r.maxDrawdownDate));
+    tileInto(tiles, "最惨的时候", (r.worstRatio * 100).toFixed(0) + "%",
+      "市值只剩投入的这么多" + (plain ? "（只买 QQQ 是 " + (plain.worstRatio * 100).toFixed(0) + "%）" : "（" + cnDate(r.worstRatioDate) + "）"));
+    tileInto(tiles, "现在市值", money(r.value), "投入 " + money(r.invested) + " · 再平衡 " + r.rebalances + " 次，成本 " + money(r.feePaid));
+
+    var bar = $("stBar");
+    bar.textContent = "";
+    var now = [r.coreShare, 100 - r.coreShare - r.tqqqShare, r.tqqqShare];
+    ASSETS.forEach(function (a, i) {
+      var it = el("i", a.cls);
+      it.style.width = Math.max(0, now[i]) + "%";
+      it.title = a.name + " " + now[i].toFixed(1) + "%";
+      bar.appendChild(it);
+    });
+    $("stBarNote").textContent = "回测跑到今天时的实际占比：SPY " + now[0].toFixed(1) + "% · QQQ " +
+      now[1].toFixed(1) + "% · TQQQ " + now[2].toFixed(1) + "%。" +
+      (st.rebalance === "never" ? "选了「从不卖」，所以涨得快的那层会越占越多。" : "");
+
+    var v = $("stVerdict");
+    if (plain) {
+      var dx = (r.xirr - plain.xirr) * 100;
+      var dd = r.maxDrawdown - plain.maxDrawdown; // 都是负数，dd<0 表示回撤更深
+      v.textContent = "从 " + cnDate(r.startDate) + " 到现在，和投同样多钱的「普通定投只买 QQQ」比：年化 " +
+        pct(r.xirr, 2) + " 对 " + pct(plain.xirr, 2) + "（" + (dx >= 0 ? "高 " : "低 ") + Math.abs(dx).toFixed(2) + " 个点），" +
+        "最大回撤 " + pctRaw(r.maxDrawdown) + " 对 " + pctRaw(plain.maxDrawdown) + "（" +
+        (dd < 0 ? "更深 " : "更浅 ") + Math.abs(dd).toFixed(1) + " 个点），" +
+        "最惨的时候手里剩投入的 " + (r.worstRatio * 100).toFixed(0) + "% 对 " + (plain.worstRatio * 100).toFixed(0) + "%。" +
+        (dd < 0 ? "回撤更深是因为那一层 TQQQ——把它调到 0 就能看到差别。" : "");
+    }
+    renderSteadyPlan();
+    renderSteadyFacts();
+  }
+
+  function renderSteadyPlan() {
+    var s = state.series;
+    if (!s || !s.hasSpy) return;
+    var amt = state.cfg.baseAmount;
+    var pl = DCA.steadyPlan(s, state.st, holding, amt);
+    if (!pl) return;
+    $("stAmt").textContent = money(amt, true);
+    var host = $("stPlanTiles");
+    host.textContent = "";
+    ASSETS.forEach(function (a, i) {
+      var t = tileInto(host, a.name + "（" + a.full + "）", money(pl.buy[i], true),
+        "约 " + pl.shares[i].toFixed(3) + " 股 · 现价 " + money(pl.prices[i], true));
+      t.style.borderLeft = "3px solid " + a.color;
+    });
+    var note = $("stPlanNote");
+    if (!(pl.total > 0)) {
+      note.textContent = "还没填持仓，所以这次就按目标配比直接分。上面「我的持仓」填了股数以后，这里会优先把钱补给最落后的那一层——平时就不用卖了。";
+      return;
+    }
+    var txt = "现在的实际占比：SPY " + pl.weightsNow[0].toFixed(1) + "% · QQQ " + pl.weightsNow[1].toFixed(1) +
+      "% · TQQQ " + pl.weightsNow[2].toFixed(1) + "%（组合 " + money(pl.total) + "）。这次的钱优先补最落后的那一层，买完变成 " +
+      pl.weightsAfter[0].toFixed(1) + " / " + pl.weightsAfter[1].toFixed(1) + " / " + pl.weightsAfter[2].toFixed(1) + "。";
+    var drift = Math.abs(pl.maxDrift);
+    if (pl.needRebalance) {
+      txt += " 偏离已经到 " + drift.toFixed(1) + " 个点，超过你设的 " + pl.band + " 个点，光靠新钱补不回来了——该真的调一次仓。";
+    } else if (drift >= 5 && pl.rebalance === "yearly") {
+      txt += " 偏离已经有 " + drift.toFixed(1) + " 个点，一次定投的钱补不回来，等今年的年度再平衡一起调。";
+    } else if (drift >= 5 && pl.rebalance === "never") {
+      txt += " 偏离有 " + drift.toFixed(1) + " 个点；你选了「从不卖」，所以它会一直偏下去，这是这个选项本来的样子。";
+    }
+    note.textContent = txt;
+  }
+
+  function renderSteadyFacts() {
+    var ul = $("stFacts");
+    if (!ul || ul.childNodes.length) return;
+    function add(t, d) {
+      var li = el("li");
+      li.appendChild(el("b", null, t));
+      li.appendChild(el("span", null, d));
+      ul.appendChild(li);
+    }
+    add("它故意不择时",
+      "不看均线、不看回撤、不加码。回测里所有「聪明」的信号换个年代就失效，所以这套干脆不猜，只靠配比和时间。");
+    add("再平衡在真实账户里是有代价的",
+      "每卖一次都有点差和手续费，在应税账户里还是一次应税事件。所以默认是一年一次，平时只用新钱去补最落后的那层，不卖。");
+    add("SPY 和 QQQ 本来就重叠很多",
+      "纳指100 的大公司也在标普500 里。加 SPY 不是为了「再买一次科技股」，是为了把非科技的那部分也买上，少押注一个行业。");
+    add("TQQQ 那一层要当成可能归零",
+      "3 倍杠杆遇到 2000—2002 那种连跌会跌掉 99% 以上，而且回不来。默认只给 10%，是「亏光也不影响生活」的量。");
+    add("这段历史并不支持「加 SPY 更稳」",
+      "1999 年以来，稳妥模式的年化和只买 QQQ 几乎一样，最大回撤反而更深一点——SPY 分散掉的风险，被那 10% TQQQ 又加了回来。滚动 10 年看也是平手（平均差不到 0.1 个点，11 胜 7 负），而且输的那几段恰好是 2000—2003 年开始投的，正是最需要分散的时候。");
+    add("真正压低回撤的旋钮是 TQQQ，不是 SPY",
+      "把 TQQQ 调到 0（比如 60/40/0），年化会低 2 个多点，但最大回撤和最惨时的市值都明显更好看。上面改一下数字就能自己比。");
+    add("那为什么还留着 SPY",
+      "理由不是这段历史，是这段历史只有一个样本：过去 27 年恰好是美国科技股赢。押 20—30 年的话，把核心放宽一点，是为了万一下一个 27 年不长这样。这是取舍，不是免费的。");
+    add("60/30/10 只是一个起点",
+      "睡不着就把 SPY 调高、TQQQ 调低；这些数字在上面随时能改，改完整张表和曲线会跟着重算。");
+  }
+
   // ================= 我的持仓 =================
-  var holding = { qqqShares: "", tqqqShares: "" };
+  var holding = { spyShares: "", qqqShares: "", tqqqShares: "" };
   function loadHold() {
     try {
       var h = JSON.parse(localStorage.getItem(HOLD_KEY) || "null");
-      if (h && typeof h === "object") { holding.qqqShares = h.qqqShares || ""; holding.tqqqShares = h.tqqqShares || ""; }
+      if (h && typeof h === "object") {
+        holding.spyShares = h.spyShares || "";
+        holding.qqqShares = h.qqqShares || "";
+        holding.tqqqShares = h.tqqqShares || "";
+      }
     } catch (e) { /* 忽略 */ }
   }
   function bindHold() {
     loadHold();
+    $("hS").value = holding.spyShares;
     $("hQ").value = holding.qqqShares;
     $("hT").value = holding.tqqqShares;
     function read() {
+      holding.spyShares = $("hS").value;
       holding.qqqShares = $("hQ").value;
       holding.tqqqShares = $("hT").value;
       try { localStorage.setItem(HOLD_KEY, JSON.stringify(holding)); } catch (e) { /* 忽略 */ }
       renderHold();
+      renderSteadyPlan();
     }
+    $("hS").addEventListener("input", read);
     $("hQ").addEventListener("input", read);
     $("hT").addEventListener("input", read);
   }
@@ -1017,6 +1271,7 @@
     renderSignal();
     renderZoneChart();
     renderBacktest();
+    renderSteady();
     renderRolling();
     renderFacts();
     renderHold();
@@ -1067,6 +1322,9 @@
     fillSettings();
     bindSettings();
     fillYears();
+    loadSteady();
+    fillSteady();
+    bindSteady();
     bindHold();
     bindPlan();
     $("app").hidden = false;
