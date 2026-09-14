@@ -446,3 +446,119 @@ test("现在该买还是该卖：sellMode 影响提示但不影响买什么", ()
     { qqqShares: 1, tqqqShares: 10 });
   assert.equal(none.hold.needSell, false);
 });
+
+// ---------- 每年固定投一笔 ----------
+
+test("汇率表：查得到的用当年，查不到的用最近一年", () => {
+  close(DCA.rateForYear(1999), 8.2770);
+  close(DCA.rateForYear(2026), 6.8296);
+  close(DCA.rateForYear(1990), 8.2770); // 比最早一年还早
+  close(DCA.rateForYear(2099), 6.8296); // 比最晚一年还晚
+  close(DCA.rateForYear(2001, { 2000: 5, 2002: 7 }), 7); // 自定义表里没有 2001
+});
+
+test("每年固定投一笔：四种做法投的钱完全一样", () => {
+  const d = tradingDays("2020-01-06", 800);
+  const flat = d.map(() => 100);
+  const s = series(d, flat, flat, flat);
+  const rates = { 2020: 7, 2021: 7, 2022: 7, 2023: 7 };
+  const opt = { amount: 70000, rates, nowRate: 7 };
+  const modes = ["lump", "plainQ", "dip", "steady"].map((m) =>
+    DCA.annualBacktest(s, { baseAmount: 100, investWeekday: 1, basis: "ath", maWindow: 20 },
+      Object.assign({ mode: m }, opt)));
+  modes.forEach((r) => assert.ok(r, "每种做法都该算得出来"));
+  // 投入完全一致
+  for (let i = 1; i < modes.length; i++) close(modes[i].investedLocal, modes[0].investedLocal, 1e-6);
+  // 价格一直不动：投多少还是多少
+  modes.forEach((r) => close(r.value, r.investedUsd, 1e-6));
+  // 人民币和美元的投入按汇率对得上
+  close(modes[0].investedLocal, modes[0].investedUsd * 7, 1e-6);
+});
+
+test("每年固定投一笔：不整年的那一年按比例摊", () => {
+  const d = tradingDays("2020-11-02", 60); // 2020 只有 9 周左右
+  const flat = d.map(() => 100);
+  const s = series(d, flat, flat, flat);
+  const r = DCA.annualBacktest(s, { baseAmount: 100, investWeekday: 1, basis: "ath", maWindow: 20 },
+    { amount: 52000, mode: "plainQ", rates: { 2020: 1, 2021: 1 }, nowRate: 1 });
+  // 每年 52000、每周一次 → 每周 1000；总投入应该等于 1000 × 实际周数
+  const weeks = r.years.reduce((a, y) => a + Math.round(y.partial * 52), 0);
+  close(r.investedLocal, weeks * 1000, 1);
+  assert.ok(r.years[0].partial < 1, "第一年不是整年");
+});
+
+test("每年固定投一笔：没有 SPY 时稳妥模式返回 null", () => {
+  const d = tradingDays("2020-01-06", 300);
+  const s = series(d, d.map(() => 100));
+  assert.equal(DCA.annualBacktest(s, {}, { amount: 1000, mode: "steady" }), null);
+  assert.ok(DCA.annualBacktest(s, {}, { amount: 1000, mode: "plainQ" }));
+});
+
+// ---------- 买入记录 ----------
+
+test("某一天规则说该投多少、买什么", () => {
+  const d = tradingDays("2020-01-06", 200);
+  const s = series(d, d.map((_, i) => ramp(i)));
+  const cfg = { baseAmount: 100, basis: "ath", maWindow: 20, dipThreshold: 20 };
+  const sug = DCA.suggestionForDate(s, cfg, d[150]);
+  assert.equal(sug.date, d[150]);
+  assert.equal(sug.basedOn, d[149], "要用前一个交易日判断，不能偷看当天");
+  assert.ok(sug.amount > 0);
+  assert.ok(["QQQ", "TQQQ"].includes(sug.asset));
+  // 日期格式不对或没数据时返回 null
+  assert.equal(DCA.suggestionForDate(s, cfg, "乱写"), null);
+});
+
+test("买入记录：按标的分别算股数和市值", () => {
+  const d = tradingDays("2020-01-06", 200);
+  const flat = d.map(() => 100);
+  const s = series(d, flat, flat.map(() => 50), flat.map(() => 200));
+  const list = [
+    { id: "a", date: d[100], asset: "QQQ", amount: 100, price: 100 },
+    { id: "b", date: d[120], asset: "TQQQ", amount: 100, price: 50 },
+    { id: "c", date: d[150], asset: "SPY", amount: 200, price: 200 },
+  ];
+  const r = DCA.summarizeTrades(s, { baseAmount: 100, basis: "ath", maWindow: 20 }, list);
+  assert.equal(r.count, 3);
+  close(r.invested, 400);
+  close(r.value, 400); // 价格没动
+  const by = {};
+  r.holdings.forEach((h) => { by[h.asset] = h; });
+  close(by.QQQ.shares, 1);
+  close(by.TQQQ.shares, 2);
+  close(by.SPY.shares, 1);
+  close(r.tqqqShare, 25); // TQQQ 100 / 总 400
+  // 不写 asset 的当成 QQQ
+  const r2 = DCA.summarizeTrades(s, {}, [{ date: d[100], amount: 100, price: 100 }]);
+  assert.equal(r2.holdings[0].asset, "QQQ");
+});
+
+test("备份：能来回转，也能读第一个站的旧格式", () => {
+  const list = [
+    { date: "2025-04-07", asset: "TQQQ", amount: 300, price: 48.5, note: "大跌" },
+    { date: "2026-01-05", asset: "QQQ", amount: 100, price: 640, note: "" },
+  ];
+  const bk = DCA.formatTradesBackup(list, { today: "2026-09-14" });
+  assert.equal(bk.count, 2);
+  assert.ok(bk.body.includes(DCA.BACKUP_BEGIN) && bk.body.includes(DCA.BACKUP_END));
+  const back = DCA.parseTradesBackup(bk.body);
+  assert.equal(back.length, 2);
+  assert.equal(back[0].asset, "TQQQ");
+  close(back[0].amount, 300);
+  assert.equal(back[0].note, "大跌");
+  // 第一个站导出的 v1：[日期, 金额, 价格, 备注]，没有标的，应该当成 QQQ
+  const v1 = DCA.BACKUP_BEGIN +
+    '\n{"app":"nasdaq100-dca","v":1,"trades":[["2024-03-04",100,430.5,"第一笔"],["2024-03-11",150,425]]}\n' +
+    DCA.BACKUP_END;
+  const old = DCA.parseTradesBackup(v1);
+  assert.equal(old.length, 2);
+  assert.equal(old[0].asset, "QQQ");
+  assert.equal(old[0].note, "第一笔");
+  assert.equal(old[1].asset, "QQQ");
+  close(old[1].price, 425);
+  // 邮件里被加了引用符号 "> " 也要能读
+  const quoted = v1.split("\n").map((x) => "> " + x).join("\n");
+  assert.equal(DCA.parseTradesBackup(quoted).length, 2);
+  // 完全读不出来要报错
+  assert.throws(() => DCA.parseTradesBackup("随便写点什么"));
+});
