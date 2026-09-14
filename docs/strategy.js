@@ -894,6 +894,312 @@
     });
   }
 
+  // ---------- 人民币年度定投：每年固定投一笔 ----------
+  // 汇率是当年人民币兑美元的年平均价（1 美元换多少人民币）
+  var CNY_RATES = {
+    1999: 8.2770, 2000: 8.2770, 2001: 8.2770, 2002: 8.2770, 2003: 8.2770, 2004: 8.2777,
+    2005: 8.1924, 2006: 7.9737, 2007: 7.6063, 2008: 6.9485, 2009: 6.8311, 2010: 6.7678,
+    2011: 6.4624, 2012: 6.3094, 2013: 6.1480, 2014: 6.1612, 2015: 6.2854, 2016: 6.6444,
+    2017: 6.7587, 2018: 6.6187, 2019: 6.9114, 2020: 6.9003, 2021: 6.4491, 2022: 6.7347,
+    2023: 7.0846, 2024: 7.1956, 2025: 7.1874, 2026: 6.8296,
+  };
+  function rateForYear(year, rates) {
+    var t = rates || CNY_RATES;
+    if (t[year] > 0) return t[year];
+    var ys = Object.keys(t).map(Number).sort(function (a, b) { return a - b; });
+    if (!ys.length) return 1;
+    if (year < ys[0]) return t[ys[0]];
+    return t[ys[ys.length - 1]];
+  }
+
+  var ANNUAL_NAMES = {
+    lump: "年初一次性买 QQQ",
+    plainQ: "每次等额买 QQQ",
+    dip: "大跌才买 TQQQ",
+    steady: "稳妥模式（宽基打底）",
+  };
+
+  // 每年投固定一笔本币。四种做法投进去的钱完全一样，区别只是怎么分配。
+  // opts: { amount 每年本币, startYear, mode, rates, nowRate, steady, dd, tl }
+  function annualBacktest(series, config, opts) {
+    opts = opts || {};
+    var cfg = withDefaults(config);
+    var st = steadyDefaults(opts.steady);
+    var n = series.n;
+    var amount = Number(opts.amount);
+    if (!(n > 1) || !(amount > 0)) return null;
+    var mode = ANNUAL_NAMES[opts.mode] ? opts.mode : "dip";
+    if (mode === "steady" && !series.hasSpy) return null;
+    var dd = opts.dd || drawdowns(series, cfg.basis).dd;
+    var tl = opts.tl || trendLines(series, cfg.maWindow);
+    var nowRate = Number(opts.nowRate) > 0 ? Number(opts.nowRate)
+      : rateForYear(+series.dates[n - 1].slice(0, 4), opts.rates);
+    var firstYear = +series.dates[0].slice(0, 4);
+    var startYear = Math.max(firstYear, Math.round(Number(opts.startYear) || 0) || firstYear);
+
+    // 按年分组定投日
+    var days = investDays(series, cfg.investWeekday, cfg.frequency);
+    var order = [], byYear = {};
+    for (var a = 0; a < days.length; a++) {
+      var i0 = days[a];
+      if (i0 < 1) continue;
+      var y0 = +series.dates[i0].slice(0, 4);
+      if (y0 < startYear) continue;
+      if (!byYear[y0]) { byYear[y0] = []; order.push(y0); }
+      byYear[y0].push(i0);
+    }
+    if (!order.length) return null;
+    var perYear = cfg.frequency === "daily" ? 252 : 52;
+
+    var shQ = 0, shT = 0, shS = 0;
+    var investedLocal = 0, investedUsd = 0, feePaid = 0, rebalances = 0, tqqqBuys = 0;
+    var flowsLocal = [], flowsUsd = [];
+    var w = [st.coreWeight / 100, st.qqqWeight / 100, st.tqqqWeight / 100];
+    var peak = 0, mdd = 0, mddDate = null, worst = Infinity, worstDate = null;
+    var lastYear = null, rows = [];
+
+    for (var k = 0; k < order.length; k++) {
+      var year = order[k], idx = byYear[year];
+      // 第一年和最后一年通常不是整年，按实际定投次数占一年的比例摊
+      var partial = Math.min(1, idx.length / perYear);
+      var localY = amount * partial;
+      var rate = rateForYear(year, opts.rates);
+      var usdY = localY / rate;
+      // 权重：大跌才买那套按倍数分配（年度总额不变），其余等额
+      var wts = [], sum = 0;
+      for (var q = 0; q < idx.length; q++) {
+        var wv = mode === "dip" ? decide(cfg, dd, tl.dev, tl.ok, idx[q] - 1).multiplier : 1;
+        wts.push(wv); sum += wv;
+      }
+      var yearStart = investedUsd;
+      for (var m = 0; m < idx.length; m++) {
+        var i = idx[m];
+        if (mode === "lump" && m > 0) { /* 年初一次性：只在第一个定投日买 */ }
+        var amt = mode === "lump" ? (m === 0 ? usdY : 0) : usdY * wts[m] / sum;
+        if (amt > 0) {
+          investedUsd += amt; investedLocal += amt * rate;
+          flowsUsd.push([series.day[i], amt]);
+          flowsLocal.push([series.day[i], amt * rate]);
+        }
+        if (mode === "steady") {
+          if (amt > 0) {
+            var vals = [shS * series.spy[i], shQ * series.adj[i], shT * series.t[i]];
+            var buy = steadyAlloc(vals, w, amt);
+            shS += buy[0] / series.spy[i];
+            shQ += buy[1] / series.adj[i];
+            shT += buy[2] / series.t[i];
+          }
+          if (lastYear === null) lastYear = year;
+          else if (year !== lastYear) {
+            lastYear = year;
+            var sh3 = [shS, shQ, shT], px3 = [series.spy[i], series.adj[i], series.t[i]];
+            var rb = steadyRebalance(sh3, px3, w);
+            shS = sh3[0]; shQ = sh3[1]; shT = sh3[2];
+            if (rb.turnover > 0) { feePaid += rb.fee; rebalances++; }
+          }
+        } else if (mode === "dip") {
+          if (amt > 0) {
+            var r = decide(cfg, dd, tl.dev, tl.ok, i - 1);
+            if (r.buyTqqq) { shT += amt * cfg.flowShare / 100 / series.t[i]; tqqqBuys++;
+              if (cfg.flowShare < 100) shQ += amt * (1 - cfg.flowShare / 100) / series.adj[i]; }
+            else shQ += amt / series.adj[i];
+          }
+          if (cfg.sellMode !== "none" && cfg.tqqqCap < 100) {
+            var tv = shT * series.t[i], tot = shQ * series.adj[i] + tv;
+            if (tot > 0 && tv / tot > cfg.tqqqCap / 100) {
+              var ex = tv - tot * cfg.tqqqCap / 100;
+              shT -= ex / series.t[i];
+              feePaid += ex * FEE;
+              shQ += ex * (1 - FEE) / series.adj[i];
+              rebalances++;
+            }
+          }
+        } else if (amt > 0) {
+          shQ += amt / series.adj[i];
+        }
+        var v = shQ * series.adj[i] + shT * series.t[i] + shS * series.spy[i];
+        if (v > peak) peak = v;
+        if (peak > 0 && v / peak - 1 < mdd) { mdd = v / peak - 1; mddDate = series.dates[i]; }
+        if (investedUsd > 0 && v / investedUsd < worst) { worst = v / investedUsd; worstDate = series.dates[i]; }
+      }
+      var lastIdx = idx[idx.length - 1];
+      rows.push({
+        year: year, rate: rate, partial: partial,
+        local: localY, usd: usdY,
+        investedUsd: investedUsd,
+        value: shQ * series.adj[lastIdx] + shT * series.t[lastIdx] + shS * series.spy[lastIdx],
+      });
+    }
+
+    var last = n - 1;
+    var value = shQ * series.adj[last] + shT * series.t[last] + shS * series.spy[last];
+    return {
+      mode: mode, modeName: ANNUAL_NAMES[mode],
+      startYear: order[0], endDate: series.dates[last],
+      years: rows, nowRate: nowRate,
+      investedLocal: investedLocal, investedUsd: investedUsd,
+      value: value, valueLocal: value * nowRate,
+      profitLocal: value * nowRate - investedLocal,
+      xirrUsd: xirr(flowsUsd, value, series.day[last]),
+      xirrLocal: xirr(flowsLocal, value * nowRate, series.day[last]),
+      maxDrawdown: mdd * 100, maxDrawdownDate: mddDate,
+      worstRatio: worst === Infinity ? 1 : worst, worstRatioDate: worstDate,
+      tqqqShare: value > 0 ? shT * series.t[last] / value * 100 : 0,
+      coreShare: value > 0 ? shS * series.spy[last] / value * 100 : 0,
+      tqqqBuys: tqqqBuys, rebalances: rebalances, feePaid: feePaid,
+    };
+  }
+
+  // ---------- 买入记录 ----------
+  var ASSETS = ["QQQ", "TQQQ", "SPY"];
+  function assetOf(v) {
+    var u = String(v == null ? "" : v).toUpperCase().trim();
+    return ASSETS.indexOf(u) >= 0 ? u : "QQQ";
+  }
+  function priceOf(series, asset, i) {
+    if (asset === "TQQQ") return series.t[i];
+    if (asset === "SPY") return series.spy[i];
+    return series.close[i];
+  }
+
+  // 某一天按规则本该投多少、买什么
+  function suggestionForDate(series, config, dateStr, pre) {
+    var cfg = withDefaults(config);
+    var n = series.n;
+    if (!n || !/^\d{4}-\d{2}-\d{2}$/.test(String(dateStr))) return null;
+    var target = dayNumber(dateStr);
+    var lo = 0, hi = n;
+    while (lo < hi) { var mid = (lo + hi) >> 1; if (series.day[mid] < target) lo = mid + 1; else hi = mid; }
+    var prev = lo < n ? lo - 1 : n - 1; // 用当天之前最后一个交易日判断，不偷看当天
+    if (prev < 0) return null;
+    var dd = (pre && pre.dd) || drawdowns(series, cfg.basis).dd;
+    var tl = (pre && pre.tl) || trendLines(series, cfg.maWindow);
+    var r = decide(cfg, dd, tl.dev, tl.ok, prev);
+    return {
+      date: dateStr, basedOn: series.dates[prev],
+      drawdown: dd[prev], deviation: tl.ok[prev] ? tl.dev[prev] : null,
+      state: r.state, stateLabel: STATE_LABELS[r.state],
+      multiplier: r.multiplier, amount: cfg.baseAmount * r.multiplier,
+      asset: r.buyTqqq ? "TQQQ" : "QQQ",
+    };
+  }
+
+  function summarizeTrades(series, config, trades) {
+    var cfg = withDefaults(config);
+    var n = series.n;
+    var pre = n ? { dd: drawdowns(series, cfg.basis).dd, tl: trendLines(series, cfg.maWindow) } : null;
+    var list = (trades || []).filter(function (t) {
+      return t && /^\d{4}-\d{2}-\d{2}$/.test(String(t.date)) && Number(t.amount) > 0 && Number(t.price) > 0;
+    }).slice().sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; });
+
+    var invested = 0, flows = [], byAsset = {}, followed = 0, compared = 0, sameAsset = 0;
+    var rows = list.map(function (t) {
+      var asset = assetOf(t.asset);
+      var amount = Number(t.amount), price = Number(t.price), sh = amount / price;
+      invested += amount;
+      flows.push([dayNumber(t.date), amount]);
+      if (!byAsset[asset]) byAsset[asset] = { shares: 0, invested: 0 };
+      byAsset[asset].shares += sh;
+      byAsset[asset].invested += amount;
+      var sug = n ? suggestionForDate(series, cfg, t.date, pre) : null;
+      var diff = null;
+      if (sug) {
+        compared++;
+        diff = amount - sug.amount;
+        if (Math.abs(diff) <= Math.max(1, sug.amount * 0.05)) followed++;
+        if (sug.asset === asset) sameAsset++;
+      }
+      return {
+        id: t.id, date: t.date, asset: asset, amount: amount, price: price, shares: sh,
+        note: t.note || "",
+        suggested: sug ? sug.amount : null,
+        suggestedAsset: sug ? sug.asset : null,
+        multiplier: sug ? sug.multiplier : null,
+        drawdown: sug ? sug.drawdown : null,
+        basedOn: sug ? sug.basedOn : null,
+        diff: diff,
+      };
+    });
+
+    var value = 0, holdings = [];
+    for (var k = 0; k < ASSETS.length; k++) {
+      var a = ASSETS[k], h = byAsset[a];
+      if (!h) continue;
+      var px = n ? priceOf(series, a, n - 1) : NaN;
+      var v = h.shares * px;
+      value += v;
+      holdings.push({ asset: a, shares: h.shares, invested: h.invested, price: px, value: v,
+        avgCost: h.shares > 0 ? h.invested / h.shares : NaN });
+    }
+    var endDay = n ? Math.max(series.day[n - 1], flows.length ? flows[flows.length - 1][0] : 0) : null;
+    return {
+      rows: rows, count: rows.length, invested: invested, value: value,
+      holdings: holdings,
+      profit: value - invested,
+      totalReturn: invested > 0 ? value / invested - 1 : 0,
+      tqqqShare: value > 0 && byAsset.TQQQ ? byAsset.TQQQ.shares * priceOf(series, "TQQQ", n - 1) / value * 100 : 0,
+      lastDate: n ? series.dates[n - 1] : null,
+      compared: compared, followed: followed, sameAsset: sameAsset,
+      xirr: flows.length && value > 0 ? xirr(flows, value, endDay) : NaN,
+    };
+  }
+
+  var BACKUP_BEGIN = "----- 定投备份开始 -----";
+  var BACKUP_END = "----- 定投备份结束 -----";
+
+  function formatTradesBackup(trades, opts) {
+    opts = opts || {};
+    var list = (trades || []).filter(function (t) {
+      return t && /^\d{4}-\d{2}-\d{2}$/.test(String(t.date)) && Number(t.amount) > 0 && Number(t.price) > 0;
+    }).slice().sort(function (a, b) { return a.date < b.date ? -1 : a.date > b.date ? 1 : 0; })
+      .map(function (t) {
+        return [t.date, Math.round(Number(t.amount) * 100) / 100,
+          Math.round(Number(t.price) * 10000) / 10000, assetOf(t.asset), String(t.note || "")];
+      });
+    var json = JSON.stringify({ app: "qqq-tqqq-dca", v: 2, trades: list });
+    var subject = "定投买入记录备份 " + (opts.today || "") + "（" + list.length + " 笔）";
+    var body = [
+      "这是我的定投买入记录备份（" + (opts.today ? opts.today + "，" : "") + "共 " + list.length + " 笔）。",
+      "",
+      "恢复方法：打开 " + (opts.siteUrl || "定投网站") + "，在「我的买入记录」点「粘贴导入」，把下面两条横线之间的内容（连横线一起）粘贴进去。",
+      "",
+      BACKUP_BEGIN, json, BACKUP_END, "",
+    ].join("\n");
+    return { subject: subject, body: body, json: json, count: list.length };
+  }
+
+  // 能读本站的 v2，也能读第一个站（纳指100定投）导出的 v1（那时候只有 QQQ）
+  function parseTradesBackup(text) {
+    var s = String(text == null ? "" : text);
+    var a = s.indexOf(BACKUP_BEGIN), b = s.indexOf(BACKUP_END);
+    if (a >= 0 && b > a) s = s.slice(a + BACKUP_BEGIN.length, b);
+    s = s.trim();
+    if (!s) throw new Error("没有找到备份内容");
+    var obj;
+    try { obj = JSON.parse(s); }
+    catch (e) {
+      try { obj = JSON.parse(s.replace(/^[ \t]*>[ \t]?/gm, "").replace(/[\r\n]+/g, "")); }
+      catch (e2) { throw new Error("备份内容不完整或格式不对"); }
+    }
+    var list = Array.isArray(obj) ? obj : obj && obj.trades;
+    if (!Array.isArray(list)) throw new Error("没有找到买入记录");
+    var v = (obj && obj.v) || 1;
+    return list.map(function (t) {
+      if (!Array.isArray(t)) {
+        return { date: t && t.date, amount: t && t.amount, price: t && t.price,
+          asset: assetOf(t && t.asset), note: (t && t.note) || "" };
+      }
+      // v1 是 [日期, 金额, 价格, 备注]；v2 是 [日期, 金额, 价格, 标的, 备注]
+      var third = String(t[3] == null ? "" : t[3]).toUpperCase().trim();
+      var isAsset = v >= 2 || ASSETS.indexOf(third) >= 0;
+      return {
+        date: t[0], amount: t[1], price: t[2],
+        asset: isAsset ? assetOf(t[3]) : "QQQ",
+        note: String((isAsset ? t[4] : t[3]) || ""),
+      };
+    });
+  }
+
   return {
     DAY_MS: DAY_MS,
     DEFAULT_CONFIG: DEFAULT_CONFIG,
@@ -928,6 +1234,18 @@
     steadyRebalance: steadyRebalance,
     steadyBacktest: steadyBacktest,
     steadyPlan: steadyPlan,
+    CNY_RATES: CNY_RATES,
+    rateForYear: rateForYear,
+    ANNUAL_NAMES: ANNUAL_NAMES,
+    annualBacktest: annualBacktest,
+    ASSETS: ASSETS,
+    assetOf: assetOf,
+    suggestionForDate: suggestionForDate,
+    summarizeTrades: summarizeTrades,
+    formatTradesBackup: formatTradesBackup,
+    parseTradesBackup: parseTradesBackup,
+    BACKUP_BEGIN: BACKUP_BEGIN,
+    BACKUP_END: BACKUP_END,
     compareModes: compareModes,
     rollingWindows: rollingWindows,
     compareStarts: compareStarts,
