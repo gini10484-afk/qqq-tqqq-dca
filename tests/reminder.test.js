@@ -114,3 +114,24 @@ test("没有 SPY 数据时，提醒里不提稳妥模式", () => {
   assert.equal(out.skip, false);
   assert.ok(!/稳妥模式/.test(out.body));
 });
+
+test("提醒里会写清楚两个买入条件离得多远", () => {
+  const data = flat(true);
+  const out = buildReminder(data, { today: data.rows[data.rows.length - 1][0], force: true });
+  assert.match(out.body, /买 TQQQ 的两个条件/);
+  assert.match(out.body, /跌破 200 日均线/);
+  assert.match(out.body, /还差/);
+});
+
+test("卖出规则触发时，标题和正文都会提示", () => {
+  const data = flat(true);
+  const today = data.rows[data.rows.length - 1][0];
+  // 横盘在均线上方：ma 规则要求清空
+  const ma = buildReminder(data, { today, force: true, config: { sellMode: "ma" } });
+  assert.match(ma.title, /该减 TQQQ/);
+  assert.match(ma.body, /该减 TQQQ 了/);
+  // 默认只守上限，不择时卖，就不该出现警告
+  const cap = buildReminder(data, { today, force: true });
+  assert.ok(!/该减 TQQQ/.test(cap.title));
+  assert.match(cap.body, /暂时不用卖/);
+});
