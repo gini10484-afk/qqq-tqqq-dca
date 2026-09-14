@@ -37,13 +37,24 @@
     ], // 跌破均线后按回撤分档加码
   };
 
+  // 稳妥模式：不择时、三层配比、定期再平衡。和上面那套规则完全独立
+  var STEADY_DEFAULT = {
+    coreWeight: 60, // SPY 标普500（核心打底）
+    qqqWeight: 30, // QQQ 纳指100（成长卫星）
+    tqqqWeight: 10, // TQQQ（杠杆，亏光也不影响生活的那部分）
+    rebalance: "yearly", // "yearly" 每年一次 | "band" 偏离超过 band 才动 | "never" 只用新钱补
+    band: 5, // band 模式：某一层偏离目标几个百分点才动手
+  };
+
   var WEEKDAY_CN = ["周日", "周一", "周二", "周三", "周四", "周五", "周六"];
   var MODE_NAMES = {
     plainQ: "普通定投（只买 QQQ）",
     comboQ: "综合策略（只买 QQQ）",
     fixed: "每次固定比例买 TQQQ",
     dip: "大跌才买 TQQQ",
+    steady: "稳妥模式（宽基打底）",
   };
+  var REBALANCE_NAMES = { yearly: "每年一次", band: "偏离超过阈值才动", never: "只用新钱补，不卖" };
   var STATE_LABELS = { hot: "涨太多", up: "正常上涨", dip: "上涨中回调", down: "下跌趋势" };
 
   // ---------- 日期工具（只算日期，不涉及时区） ----------
@@ -99,8 +110,27 @@
     };
   }
 
+  // 稳妥模式的设置：三个权重加起来归一到 100
+  function steadyDefaults(s) {
+    var c = s || {}, d = STEADY_DEFAULT;
+    var a = num(c.coreWeight, 0, 100, d.coreWeight);
+    var b = num(c.qqqWeight, 0, 100, d.qqqWeight);
+    var t = num(c.tqqqWeight, 0, 100, d.tqqqWeight);
+    var sum = a + b + t;
+    if (!(sum > 0)) { a = d.coreWeight; b = d.qqqWeight; t = d.tqqqWeight; sum = 100; }
+    var mode = c.rebalance === "band" || c.rebalance === "never" ? c.rebalance : "yearly";
+    return {
+      coreWeight: a / sum * 100,
+      qqqWeight: b / sum * 100,
+      tqqqWeight: t / sum * 100,
+      rebalance: mode,
+      band: num(c.band, 0.5, 30, d.band),
+    };
+  }
+
   // ---------- 数据 ----------
-  // rows: [日期, QQQ 收盘, QQQ 复权价, TQQQ 复权价, 是不是真实 TQQQ 数据(1/0)]
+  // rows: [日期, QQQ 收盘, QQQ 复权价, TQQQ 复权价, 是不是真实 TQQQ 数据(1/0), SPY 复权价]
+  // 第 6 列（SPY）是后来加的，旧的 data.json 没有也不会报错，只是稳妥模式用不了
   function prepare(data) {
     var rows = (data && data.rows) || [];
     var n = rows.length;
@@ -108,7 +138,9 @@
       n: n, dates: new Array(n), day: new Array(n),
       close: new Float64Array(n), adj: new Float64Array(n),
       t: new Float64Array(n), real: new Uint8Array(n),
+      spy: new Float64Array(n),
     };
+    var spyOk = n > 0;
     for (var i = 0; i < n; i++) {
       var r = rows[i];
       s.dates[i] = r[0];
@@ -117,7 +149,10 @@
       s.adj[i] = +r[2];
       s.t[i] = +r[3];
       s.real[i] = r[4] ? 1 : 0;
+      var sp = r.length > 5 ? +r[5] : NaN;
+      if (isFinite(sp) && sp > 0) s.spy[i] = sp; else spyOk = false;
     }
+    s.hasSpy = spyOk;
     s.firstRealIdx = -1;
     for (var k = 0; k < n; k++) if (s.real[k]) { s.firstRealIdx = k; break; }
     return s;
@@ -377,6 +412,172 @@
     };
   }
 
+  // ---------- 稳妥模式：不择时，三层配比，定期再平衡 ----------
+  // 三层顺序固定为 [0]=SPY 核心、[1]=QQQ、[2]=TQQQ
+
+  // 这一次的新钱怎么分：先补最缺的那层，补平了再按目标权重分。这样平时不用卖，省成本也省税
+  function steadyAlloc(vals, w, amt) {
+    var tot = vals[0] + vals[1] + vals[2] + amt;
+    var gap = [0, 0, 0], g = 0, k;
+    for (k = 0; k < 3; k++) { gap[k] = Math.max(0, w[k] * tot - vals[k]); g += gap[k]; }
+    var out = [0, 0, 0];
+    if (!(g > 0)) { for (k = 0; k < 3; k++) out[k] = amt * w[k]; return out; }
+    var use = Math.min(amt, g);
+    for (k = 0; k < 3; k++) out[k] = use * gap[k] / g;
+    var left = amt - use;
+    if (left > 0) for (k = 0; k < 3; k++) out[k] += left * w[k];
+    return out;
+  }
+
+  // 真正的再平衡：卖掉超配的，扣掉点差，买回低配的。sh 会被就地改掉
+  function steadyRebalance(sh, px, w) {
+    var v = [sh[0] * px[0], sh[1] * px[1], sh[2] * px[2]];
+    var tot = v[0] + v[1] + v[2];
+    if (!(tot > 0)) return { fee: 0, turnover: 0 };
+    var sell = 0, need = [0, 0, 0], needSum = 0, k, d;
+    for (k = 0; k < 3; k++) {
+      d = v[k] - w[k] * tot;
+      if (d > 0) { sell += d; sh[k] -= d / px[k]; }
+      else { need[k] = -d; needSum += -d; }
+    }
+    if (!(sell > 0) || !(needSum > 0)) return { fee: 0, turnover: 0 };
+    var fee = sell * FEE, cash = sell - fee;
+    for (k = 0; k < 3; k++) if (need[k] > 0) sh[k] += cash * (need[k] / needSum) / px[k];
+    return { fee: fee, turnover: sell };
+  }
+
+  function steadyBacktest(series, config, steady, opts) {
+    opts = opts || {};
+    if (!series.hasSpy) return null;
+    var cfg = withDefaults(config);
+    var st = steadyDefaults(steady);
+    var w = [st.coreWeight / 100, st.qqqWeight / 100, st.tqqqWeight / 100];
+    var n = series.n;
+    var startIdx = 0;
+    if (opts.startDate) while (startIdx < n && series.dates[startIdx] < opts.startDate) startIdx++;
+    var endIdx = n;
+    if (opts.endDate) { endIdx = 0; while (endIdx < n && series.dates[endIdx] < opts.endDate) endIdx++; }
+    if (startIdx < 1) startIdx = 1;
+    if (endIdx <= startIdx) return null;
+
+    var isInvestDay = new Uint8Array(n);
+    var days = investDays(series, cfg.investWeekday, cfg.frequency);
+    for (var a = 0; a < days.length; a++) if (days[a] >= startIdx && days[a] < endIdx) isInvestDay[days[a]] = 1;
+
+    var sh = [0, 0, 0];
+    var invested = 0, times = 0, rebalances = 0, feePaid = 0, turnover = 0;
+    var flows = [];
+    var curve = [], tshare = [], ratio = [], cshare = [];
+    var peak = 0, mdd = 0, mddDate = null;
+    var worstRatio = Infinity, worstDate = null;
+    var under = 0, maxUnder = 0;
+    var lastRebYear = null;
+
+    for (var i = startIdx; i < endIdx; i++) {
+      var px = [series.spy[i], series.adj[i], series.t[i]];
+      if (isInvestDay[i]) {
+        var amt = cfg.baseAmount; // 稳妥模式不加码、不减码，每次都一样多
+        invested += amt; times++;
+        flows.push([series.day[i], amt]);
+        var vals = [sh[0] * px[0], sh[1] * px[1], sh[2] * px[2]];
+        var buy = steadyAlloc(vals, w, amt);
+        for (var k = 0; k < 3; k++) if (buy[k] > 0) sh[k] += buy[k] / px[k];
+
+        var year = series.dates[i].slice(0, 4), doReb = false;
+        if (st.rebalance === "yearly") {
+          if (lastRebYear === null) lastRebYear = year;
+          else if (year !== lastRebYear) { doReb = true; lastRebYear = year; }
+        } else if (st.rebalance === "band") {
+          var v2 = [sh[0] * px[0], sh[1] * px[1], sh[2] * px[2]];
+          var t2 = v2[0] + v2[1] + v2[2];
+          if (t2 > 0) for (var m = 0; m < 3; m++) if (Math.abs(v2[m] / t2 - w[m]) * 100 >= st.band) doReb = true;
+        }
+        if (doReb) {
+          var rb = steadyRebalance(sh, px, w);
+          if (rb.turnover > 0) { rebalances++; feePaid += rb.fee; turnover += rb.turnover; }
+        }
+      }
+      var vv = [sh[0] * px[0], sh[1] * px[1], sh[2] * px[2]];
+      var v = vv[0] + vv[1] + vv[2];
+      curve.push(v);
+      tshare.push(v > 0 ? vv[2] / v * 100 : 0);
+      cshare.push(v > 0 ? vv[0] / v * 100 : 0);
+      ratio.push(invested > 0 ? v / invested : 1);
+      if (v > peak) peak = v;
+      if (peak > 0) { var d0 = v / peak - 1; if (d0 < mdd) { mdd = d0; mddDate = series.dates[i]; } }
+      if (invested > 0) {
+        var rr = v / invested;
+        if (rr < worstRatio) { worstRatio = rr; worstDate = series.dates[i]; }
+        if (v < invested) { under++; if (under > maxUnder) maxUnder = under; } else under = 0;
+      }
+    }
+
+    var last = endIdx - 1;
+    var value = sh[0] * series.spy[last] + sh[1] * series.adj[last] + sh[2] * series.t[last];
+    return {
+      mode: "steady",
+      modeName: MODE_NAMES.steady,
+      steady: st,
+      startDate: series.dates[startIdx],
+      endDate: series.dates[last],
+      times: times, tqqqBuys: times, rebalances: rebalances,
+      feePaid: feePaid, turnover: turnover,
+      invested: invested, value: value,
+      valueCore: sh[0] * series.spy[last],
+      valueQ: sh[1] * series.adj[last],
+      valueT: sh[2] * series.t[last],
+      coreShare: value > 0 ? sh[0] * series.spy[last] / value * 100 : 0,
+      tqqqShare: value > 0 ? sh[2] * series.t[last] / value * 100 : 0,
+      profit: value - invested,
+      totalReturn: invested > 0 ? value / invested - 1 : 0,
+      xirr: xirr(flows, value, series.day[last]),
+      maxDrawdown: mdd * 100, maxDrawdownDate: mddDate,
+      worstRatio: worstRatio === Infinity ? 1 : worstRatio,
+      worstRatioDate: worstDate,
+      underwaterYears: maxUnder / 252,
+      curve: curve, tshare: tshare, ratio: ratio, cshare: cshare,
+      firstIdx: startIdx, lastIdx: last,
+    };
+  }
+
+  // 这次该往三层各投多少钱（页面上「我的持仓」用）
+  function steadyPlan(series, steady, holding, amount) {
+    if (!series.hasSpy || !series.n) return null;
+    var st = steadyDefaults(steady);
+    var i = series.n - 1;
+    var w = [st.coreWeight / 100, st.qqqWeight / 100, st.tqqqWeight / 100];
+    var px = [series.spy[i], series.adj[i], series.t[i]];
+    var h = holding || {};
+    var sh = [
+      Math.max(0, Number(h.spyShares) || 0),
+      Math.max(0, Number(h.qqqShares) || 0),
+      Math.max(0, Number(h.tqqqShares) || 0),
+    ];
+    var vals = [sh[0] * px[0], sh[1] * px[1], sh[2] * px[2]];
+    var tot = vals[0] + vals[1] + vals[2];
+    var amt = Math.max(0, Number(amount) || 0);
+    var buy = steadyAlloc(vals, w, amt);
+    var after = [vals[0] + buy[0], vals[1] + buy[1], vals[2] + buy[2]];
+    var atot = after[0] + after[1] + after[2];
+    var drift = [0, 0, 0], maxDrift = 0, k;
+    for (k = 0; k < 3; k++) {
+      drift[k] = tot > 0 ? (vals[k] / tot - w[k]) * 100 : 0;
+      if (Math.abs(drift[k]) > Math.abs(maxDrift)) maxDrift = drift[k];
+    }
+    return {
+      date: series.dates[i],
+      prices: px, values: vals, total: tot,
+      buy: buy,
+      shares: [px[0] > 0 ? buy[0] / px[0] : 0, px[1] > 0 ? buy[1] / px[1] : 0, px[2] > 0 ? buy[2] / px[2] : 0],
+      weightsNow: tot > 0 ? [vals[0] / tot * 100, vals[1] / tot * 100, vals[2] / tot * 100] : [0, 0, 0],
+      weightsAfter: atot > 0 ? [after[0] / atot * 100, after[1] / atot * 100, after[2] / atot * 100] : [0, 0, 0],
+      targets: [st.coreWeight, st.qqqWeight, st.tqqqWeight],
+      drift: drift, maxDrift: maxDrift,
+      band: st.band, rebalance: st.rebalance,
+      needRebalance: st.rebalance === "band" && tot > 0 ? Math.abs(maxDrift) >= st.band : false,
+    };
+  }
+
   // 几种做法一起比
   function compareModes(series, config, opts) {
     opts = opts || {};
@@ -552,6 +753,8 @@
   return {
     DAY_MS: DAY_MS,
     DEFAULT_CONFIG: DEFAULT_CONFIG,
+    STEADY_DEFAULT: STEADY_DEFAULT,
+    REBALANCE_NAMES: REBALANCE_NAMES,
     MODE_NAMES: MODE_NAMES,
     STATE_LABELS: STATE_LABELS,
     WEEKDAY_CN: WEEKDAY_CN,
@@ -561,6 +764,7 @@
     weekdayOf: weekdayOf,
     mondayOf: mondayOf,
     withDefaults: withDefaults,
+    steadyDefaults: steadyDefaults,
     normalizeTiers: normalizeTiers,
     prepare: prepare,
     drawdowns: drawdowns,
@@ -572,6 +776,10 @@
     currentSignal: currentSignal,
     xirr: xirr,
     backtest: backtest,
+    steadyAlloc: steadyAlloc,
+    steadyRebalance: steadyRebalance,
+    steadyBacktest: steadyBacktest,
+    steadyPlan: steadyPlan,
     compareModes: compareModes,
     rollingWindows: rollingWindows,
     compareStarts: compareStarts,
