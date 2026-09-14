@@ -125,6 +125,22 @@
   .sig-explain { color: var(--ink-2); margin-top: 12px; max-width: 700px; }
   .sig-foot { margin-top: 14px; }
 
+  .conds { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 10px; margin-top: 16px; }
+  .cond { background: var(--surface-2); border-radius: 10px; padding: 10px 12px; display: flex; gap: 10px; align-items: flex-start; }
+  .cond .mark { flex: none; width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
+    font-size: 12px; font-weight: 700; color: #fff; background: var(--muted); margin-top: 1px; }
+  .cond.on .mark { background: var(--s-dip); }
+  .cond .ct { font-size: 13px; font-weight: 620; }
+  .cond .cs { font-size: 12px; color: var(--ink-2); margin-top: 2px; }
+
+  .sell-box { margin-top: 16px; border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; background: var(--surface-2); }
+  .sell-box.on { border-color: var(--risk-border); background: var(--risk-bg); color: var(--risk-ink); }
+  .sell-box .sh { font-size: 13px; color: var(--ink-2); }
+  .sell-box.on .sh { color: var(--risk-ink); }
+  .sell-box .sv { font-size: 19px; font-weight: 650; margin-top: 2px; }
+  .sell-box .sd { font-size: 13px; margin-top: 6px; }
+  .sell-box .sd + .sd { margin-top: 3px; }
+
   /* 图表 */
   .chart { position: relative; width: 100%; }
   .chart svg { display: block; overflow: visible; }
@@ -263,7 +279,22 @@
         <label class="field">触发时这次的钱有多少买 TQQQ
           <span class="unit-input"><input id="flowShare" class="narrow" type="number" min="0" max="100" step="5" inputmode="decimal"><span>%</span></span>
         </label>
-        <label class="check" style="margin-bottom:8px"><input id="sellOnRecover" type="checkbox">涨回均线上方就把 TQQQ 全换成 QQQ</label>
+        <div class="plan-form" style="margin-bottom:10px">
+          <label class="field">什么时候卖 TQQQ
+            <select id="sellMode">
+              <option value="cap">只守占比上限，不择时卖</option>
+              <option value="ma">涨回 200 日均线就全换回 QQQ</option>
+              <option value="peak">涨回前高附近就减到目标比例</option>
+              <option value="none">完全不卖（连上限也不管）</option>
+            </select>
+          </label>
+          <label class="field" id="peakWithinField">离前高不到
+            <span class="unit-input"><input id="sellPeakWithin" class="narrow" type="number" min="0" max="30" step="1" inputmode="decimal"><span>%</span></span>
+          </label>
+          <label class="field" id="peakTargetField">就减到
+            <span class="unit-input"><input id="sellTargetShare" class="narrow" type="number" min="0" max="100" step="5" inputmode="decimal"><span>%</span></span>
+          </label>
+        </div>
       </div>
       <div class="tier-editor">
         <h3>跌破 200 日均线之后，这次投多少倍</h3>
@@ -284,6 +315,13 @@
         <div class="sig-mult" id="sigMult"></div>
       </div>
       <p class="sig-explain" id="sigExplain"></p>
+      <div class="conds" id="sigConds"></div>
+      <div class="sell-box" id="sellBox">
+        <div class="sh">要不要卖 TQQQ</div>
+        <div class="sv" id="sellVerdict">—</div>
+        <div class="sd" id="sellNote"></div>
+        <div class="sd" id="sellHow"></div>
+      </div>
       <p class="sig-foot small" id="sigFoot"></p>
     </section>
 
@@ -335,6 +373,23 @@
         <div class="legend"><span><i class="key area" style="background:var(--s-dip)"></i>TQQQ 占组合的比例（大跌才买）</span><span><i class="key" style="background:var(--ink-2)"></i>你设的上限</span></div>
         <div class="chart" id="shareChart"></div>
         <p class="small" id="shareNote"></p>
+      </div>
+      <div class="card" style="margin-top:14px">
+        <div class="legend"><span>四种卖出规则，其他设置完全一样</span></div>
+        <div class="table-wrap">
+          <table id="sellTable">
+            <thead>
+              <tr>
+                <th scope="col">什么时候卖</th><th scope="col">年化</th><th scope="col">最大回撤</th>
+                <th scope="col">最惨时<span class="note">市值/投入</span></th>
+                <th scope="col">平均 TQQQ<span class="note">占组合</span></th>
+                <th scope="col">动手次数</th>
+              </tr>
+            </thead>
+            <tbody></tbody>
+          </table>
+        </div>
+        <p class="small" id="sellTableNote"></p>
       </div>
     </section>
 
@@ -568,7 +623,11 @@
     $("dipThreshold").value = c.dipThreshold;
     $("tqqqCap").value = c.tqqqCap;
     $("flowShare").value = c.flowShare;
-    $("sellOnRecover").checked = c.sellOnRecover;
+    $("sellMode").value = c.sellMode;
+    $("sellPeakWithin").value = c.sellPeakWithin;
+    $("sellTargetShare").value = c.sellTargetShare;
+    $("peakWithinField").hidden = c.sellMode !== "peak";
+    $("peakTargetField").hidden = c.sellMode !== "peak";
     $("weekdayField").hidden = isDaily();
     $("hotAboveText").textContent = c.hotAbove;
     $("hotMultText").textContent = c.hotMultiplier;
@@ -623,13 +682,18 @@
       state.cfg.dipThreshold = +$("dipThreshold").value;
       state.cfg.tqqqCap = +$("tqqqCap").value;
       state.cfg.flowShare = +$("flowShare").value;
-      state.cfg.sellOnRecover = $("sellOnRecover").checked;
+      state.cfg.sellMode = $("sellMode").value;
+      state.cfg.sellPeakWithin = +$("sellPeakWithin").value;
+      state.cfg.sellTargetShare = +$("sellTargetShare").value;
+      state.cfg.sellOnRecover = false; // 老开关不再用，避免和 sellMode 打架
       commit();
     }
     ["baseAmount", "frequency", "investWeekday", "basis", "dipThreshold", "tqqqCap", "flowShare"].forEach(function (id) {
       $(id).addEventListener("change", readAll);
     });
-    $("sellOnRecover").addEventListener("change", readAll);
+    ["sellMode", "sellPeakWithin", "sellTargetShare"].forEach(function (id) {
+      $(id).addEventListener("change", readAll);
+    });
     $("resetCfg").addEventListener("click", function () {
       state.cfg = DCA.withDefaults({});
       commit();
@@ -667,8 +731,49 @@
   }
 
   // ================= 信号 =================
+  function cond(on, title, sub) {
+    var d = el("div", "cond" + (on ? " on" : ""));
+    var m = el("span", "mark", on ? "✓" : "✗");
+    var b = el("div");
+    b.appendChild(el("div", "ct", title));
+    b.appendChild(el("div", "cs", sub));
+    d.appendChild(m); d.appendChild(b);
+    return d;
+  }
+
+  function renderSellBox(st) {
+    var cfg = state.cfg;
+    var box = $("sellBox"), v = $("sellVerdict"), note = $("sellNote"), how = $("sellHow");
+    var h = st.hold;
+    var act = !!(h && h.needSell);
+    box.className = "sell-box" + (act ? " on" : "");
+    if (cfg.sellMode === "none") {
+      v.textContent = "不卖，连上限也不管";
+      note.textContent = "TQQQ 会一直累积。回测里这样做年化最高，但最大回撤 −78%、最惨时市值只剩投入的 17%，而且 TQQQ 最后会占到组合的 91%——等于赌身家。";
+      how.textContent = "";
+      return;
+    }
+    if (act) {
+      v.textContent = h.kind === "rule" && cfg.sellMode === "ma" ? "该把 TQQQ 全部换回 QQQ" : "该减 TQQQ";
+      how.textContent = "按你填的持仓：卖掉约 " + h.sellShares.toFixed(2) + " 股 TQQQ（约 " + money(h.sellAmount) +
+        "）换成 QQQ，占比就从 " + h.tqqqShare.toFixed(1) + "% 回到 " + h.targetShare.toFixed(0) + "%。";
+    } else if (st.sell.triggered) {
+      v.textContent = "规则说该减了";
+      how.textContent = h ? "不过按你填的持仓（TQQQ 占 " + h.tqqqShare.toFixed(1) + "%）已经在目标以内，不用动。"
+        : "下面「我的持仓」填上股数，这里就会算出具体卖几股。";
+    } else {
+      v.textContent = "暂时不用卖";
+      how.textContent = h && h.total > 0
+        ? "现在 TQQQ 占组合 " + h.tqqqShare.toFixed(1) + "%，上限 " + cfg.tqqqCap + "%。"
+        : "下面「我的持仓」填上股数，这里就会按你的实际占比提醒。";
+    }
+    note.textContent = st.sell.note;
+  }
+
   function renderSignal() {
     var s = state.series, cfg = state.cfg;
+    var st = DCA.currentStatus(s, cfg, holding, { dd: cache.dd, tl: cache.tl });
+    cache.status = st;
     var sig = DCA.currentSignal(s, cfg, { dd: cache.dd, tl: cache.tl });
     cache.sig = sig;
     $("sigDate").textContent = cnDate(sig.nextDate) + "（" + sig.weekdayName + "）";
@@ -691,8 +796,20 @@
       parts.push("不是大跌，买 QQQ。");
     }
     $("sigExplain").textContent = parts.join("");
+    // 两个买入条件离得多远
+    var cw = $("sigConds");
+    cw.textContent = "";
+    cw.appendChild(cond(st.gap.belowMA,
+      "条件① 跌破 " + cfg.maWindow + " 日均线",
+      st.gap.maGap == null ? "均线数据还不够"
+        : st.gap.belowMA ? "已经在均线下方 " + pctRaw(-st.gap.maGap)
+        : "现在比均线高 " + pctRaw(st.gap.maGap) + "，还要再跌这么多才到"));
+    cw.appendChild(cond(st.gap.deepEnough,
+      "条件② 离" + (cfg.basis === "ath" ? "历史" : "近一年") + "最高点跌 ≥ " + cfg.dipThreshold + "%",
+      st.gap.deepEnough ? "已经跌了 " + pctRaw(st.gap.ddNow)
+        : "现在跌了 " + pctRaw(st.gap.ddNow) + "，还差 " + pctRaw(st.gap.ddGap)));
+    renderSellBox(st);
     var foot = [];
-    if (sig.sellOnRecover) foot.push("你开了「涨回均线就换回 QQQ」，现在在均线上方，手里的 TQQQ 该换成 QQQ。");
     foot.push("美股开盘时间：北京时间 21:30（夏令时）/ 22:30（冬令时）。");
     foot.push("信号用的是上一个交易日的收盘价，不会偷看当天价格。");
     $("sigFoot").textContent = foot.join(" ");
@@ -792,6 +909,7 @@
       " 次再平衡，手续费假设合计 " + money(dip.feePaid) + "。";
     renderCurveChart(res);
     renderShareChart(dip);
+    renderSellTable();
     // 同样的规则、但不设上限，用来说明上限起了什么作用
     var noCap = DCA.backtest(s, Object.assign({}, cfg, { tqqqCap: 100 }), {
       mode: "dip", startDate: start + "-01-01", dd: cache.dd, tl: cache.tl,
@@ -802,6 +920,39 @@
         noCap.tqqqShare.toFixed(0) + "%，年化 " + pct(noCap.xirr, 2) + " 但最大回撤 " + pctRaw(noCap.maxDrawdown) +
         "、最惨时市值只有投入的 " + (noCap.worstRatio * 100).toFixed(0) + "%。";
   }
+  function renderSellTable() {
+    var s = state.series, cfg = state.cfg;
+    var start = $("btYear").value;
+    var tb = $("sellTable").tBodies[0];
+    tb.textContent = "";
+    var rows = ["cap", "ma", "peak", "none"].map(function (m) {
+      var r = DCA.backtest(s, Object.assign({}, cfg, { sellMode: m }), {
+        mode: "dip", startDate: start + "-01-01", dd: cache.dd, tl: cache.tl,
+      });
+      var sum = 0;
+      for (var i = 0; i < r.tshare.length; i++) sum += r.tshare[i];
+      r.avgShare = r.tshare.length ? sum / r.tshare.length : 0;
+      r.key = m;
+      return r;
+    });
+    rows.forEach(function (r) {
+      var tr = el("tr", r.key === cfg.sellMode ? "em" : null);
+      tr.appendChild(el("td", "label", DCA.SELL_NAMES[r.key] + (r.key === cfg.sellMode ? "（你现在用的）" : "")));
+      tr.appendChild(el("td", null, pct(r.xirr, 2)));
+      tr.appendChild(el("td", null, pctRaw(r.maxDrawdown)));
+      tr.appendChild(el("td", null, (r.worstRatio * 100).toFixed(0) + "%"));
+      tr.appendChild(el("td", null, r.avgShare.toFixed(1) + "%"));
+      tr.appendChild(el("td", null, String(r.rebalances)));
+      tb.appendChild(tr);
+    });
+    var capR = rows[0], maR = rows[1];
+    $("sellTableNote").textContent =
+      "看「平均 TQQQ 占组合」这一列就明白了：择时卖之所以回撤更小，主要是因为它让你平均只拿着很少的 TQQQ（" +
+      maR.avgShare.toFixed(1) + "% 对 " + capR.avgShare.toFixed(1) + "%），而不是因为卖在了对的时候。" +
+      "想要同样的效果，直接把上限从 " + cfg.tqqqCap + "% 调低也能做到，而且不用频繁动手、不用交那么多次税。";
+    return rows;
+  }
+
   function svgKey(color) {
     var i = el("i", "key");
     i.style.background = color;
@@ -1155,6 +1306,7 @@
       try { localStorage.setItem(HOLD_KEY, JSON.stringify(holding)); } catch (e) { /* 忽略 */ }
       renderHold();
       renderSteadyPlan();
+      renderSignal();
     }
     $("hS").addEventListener("input", read);
     $("hQ").addEventListener("input", read);
