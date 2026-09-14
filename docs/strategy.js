@@ -27,7 +27,14 @@
     dipThreshold: 20, // 跌破均线 + 回撤到这个百分比，才把钱买 TQQQ
     tqqqCap: 20, // TQQQ 占组合的上限（%），超过就换回 QQQ
     flowShare: 100, // 触发时，这一次的钱有百分之几买 TQQQ
-    sellOnRecover: false, // true = 站回均线上方就把 TQQQ 全部换成 QQQ
+    sellOnRecover: false, // 老设置，等同于 sellMode:"ma"（留着兼容以前存的设置）
+    sellMode: "cap", // 卖出规则：
+    //   "cap"  只守占比上限，不择时卖（回测里唯一站得住的）
+    //   "ma"   涨回 200 日均线就把 TQQQ 全换成 QQQ
+    //   "peak" 涨回近一年最高点附近就把 TQQQ 减到目标比例
+    //   "none" 完全不卖，连上限也不管（很危险，只用来做对照）
+    sellPeakWithin: 5, // "peak"：离近一年最高点不到这么多个百分点就减仓
+    sellTargetShare: 10, // "peak"：减到组合的百分之几
     hotAbove: 15, // 比均线高这么多算“涨太多”
     hotMultiplier: 0.5, // 涨太多时的倍数
     tiers: [
@@ -91,6 +98,20 @@
     var x = Number(v);
     return isFinite(x) && x >= lo && x <= hi ? x : dflt;
   }
+  var SELL_MODES = ["cap", "ma", "peak", "none"];
+  var SELL_NAMES = {
+    cap: "只守占比上限（不择时卖）",
+    ma: "涨回 200 日均线就全换回 QQQ",
+    peak: "涨回前高附近就减到目标比例",
+    none: "完全不卖（连上限也不管）",
+  };
+  // 以前只有 sellOnRecover 这个开关，读到老设置时把它翻译成 sellMode
+  function normalizeSellMode(c) {
+    if (c && SELL_MODES.indexOf(c.sellMode) >= 0) return c.sellMode;
+    if (c && c.sellOnRecover) return "ma";
+    return DEFAULT_CONFIG.sellMode;
+  }
+
   function withDefaults(config) {
     var c = config || {};
     var d = DEFAULT_CONFIG;
@@ -104,6 +125,9 @@
       tqqqCap: num(c.tqqqCap, 0, 100, d.tqqqCap),
       flowShare: num(c.flowShare, 0, 100, d.flowShare),
       sellOnRecover: !!c.sellOnRecover,
+      sellMode: normalizeSellMode(c),
+      sellPeakWithin: num(c.sellPeakWithin, 0, 30, d.sellPeakWithin),
+      sellTargetShare: num(c.sellTargetShare, 0, 100, d.sellTargetShare),
       hotAbove: num(c.hotAbove, 0, 100, d.hotAbove),
       hotMultiplier: num(c.hotMultiplier, 0, 5, d.hotMultiplier),
       tiers: normalizeTiers(c.tiers, d.tiers),
@@ -287,6 +311,96 @@
     };
   }
 
+  // ---------- 现在到底该买还是该卖 ----------
+  // 一次算清楚：这次买什么、要不要减 TQQQ、离各个门槛还差多少。
+  // holding 可以不传；传了才会算具体卖几股。
+  function currentStatus(series, config, holding, pre) {
+    var cfg = withDefaults(config);
+    var n = series.n;
+    if (!n) return null;
+    var dd = (pre && pre.dd) || drawdowns(series, cfg.basis).dd;
+    var tl = (pre && pre.tl) || trendLines(series, cfg.maWindow);
+    var i = n - 1; // 用最后一个交易日的收盘价判断
+    var r = decide(cfg, dd, tl.dev, tl.ok, i);
+    var next = nextInvestDate(series.dates[i], cfg.investWeekday, cfg.frequency);
+    var hasMA = !!tl.ok[i];
+    var belowMA = hasMA && tl.dev[i] < 0;
+    var deepEnough = dd[i] >= cfg.dipThreshold;
+
+    // 卖出规则怎么说
+    var target = sellTargetFor(cfg, dd, tl, i);
+    var sellNote = "";
+    if (cfg.sellMode === "cap") sellNote = "只在 TQQQ 超过 " + cfg.tqqqCap + "% 上限时换回 QQQ，不按行情择时卖。";
+    else if (cfg.sellMode === "none") sellNote = "你选了完全不卖，连上限也不管。";
+    else if (cfg.sellMode === "ma") {
+      sellNote = target !== null
+        ? "已经站回 " + cfg.maWindow + " 日均线上方，按规则把 TQQQ 全部换成 QQQ。"
+        : "还在 " + cfg.maWindow + " 日均线下方，先不卖。";
+    } else if (cfg.sellMode === "peak") {
+      sellNote = target !== null
+        ? "离近一年最高点只差 " + dd[i].toFixed(1) + "%（门槛 " + cfg.sellPeakWithin + "%），按规则把 TQQQ 减到 " + cfg.sellTargetShare + "%。"
+        : "离近一年最高点还有 " + dd[i].toFixed(1) + "%，没到 " + cfg.sellPeakWithin + "% 的减仓门槛。";
+    }
+
+    // 持仓（可选）
+    var hold = null;
+    if (holding) {
+      var q = Math.max(0, Number(holding.qqqShares) || 0);
+      var t = Math.max(0, Number(holding.tqqqShares) || 0);
+      var pq = series.adj[i], pt = series.t[i];
+      var vq = q * pq, vt = t * pt, tot = vq + vt;
+      var share = tot > 0 ? vt / tot * 100 : 0;
+      // 规则要减到 target，上限要求不超过 cap，取更严的那个
+      var want = target;
+      if (cfg.sellMode !== "none") want = want === null ? cfg.tqqqCap : Math.min(want, cfg.tqqqCap);
+      var cutAmt = 0, kind = null;
+      if (tot > 0 && want !== null && share > want + 0.01) {
+        cutAmt = vt - tot * want / 100;
+        kind = (target !== null && want === target) ? "rule" : "cap";
+      }
+      hold = {
+        total: tot, qqqValue: vq, tqqqValue: vt, tqqqShare: share,
+        cap: cfg.tqqqCap, targetShare: want,
+        sellAmount: cutAmt, sellShares: pt > 0 ? cutAmt / pt : 0,
+        kind: kind, needSell: cutAmt > 1 && cutAmt > tot * 0.005,
+      };
+    }
+
+    return {
+      basedOn: series.dates[i],
+      nextDate: next,
+      weekdayName: WEEKDAY_CN[(weekdayOf(dayNumber(next)) + 7) % 7],
+      frequency: cfg.frequency,
+      price: series.adj[i], close: series.close[i], tqqqPrice: series.t[i],
+      drawdown: dd[i], dev: hasMA ? tl.dev[i] : null, ma: hasMA ? tl.ma[i] : null,
+      // 买
+      buy: {
+        asset: r.buyTqqq ? "TQQQ" : "QQQ",
+        state: r.state, stateLabel: STATE_LABELS[r.state],
+        multiplier: r.multiplier, amount: cfg.baseAmount * r.multiplier,
+        tqqqAmount: r.buyTqqq ? cfg.baseAmount * r.multiplier * cfg.flowShare / 100 : 0,
+      },
+      // 离“买 TQQQ”还差多少（两个条件都要满足）
+      gap: {
+        belowMA: belowMA,
+        maGap: hasMA ? tl.dev[i] : null, // >0 表示还要跌这么多百分比才到均线
+        deepEnough: deepEnough,
+        ddNow: dd[i], ddNeed: cfg.dipThreshold,
+        ddGap: Math.max(0, cfg.dipThreshold - dd[i]), // 还要再跌几个点
+        ready: belowMA && deepEnough,
+      },
+      // 卖
+      sell: {
+        mode: cfg.sellMode, modeName: SELL_NAMES[cfg.sellMode],
+        triggered: target !== null,
+        targetShare: target,
+        note: sellNote,
+        peakGap: cfg.sellMode === "peak" ? dd[i] - cfg.sellPeakWithin : null,
+      },
+      hold: hold,
+    };
+  }
+
   // ---------- XIRR ----------
   function xirr(flows, finalValue, finalDay) {
     if (!flows.length || !(finalValue > 0)) return 0;
@@ -309,6 +423,21 @@
   //     | "fixed" 每次固定把 fixedShare% 的钱买 TQQQ | "dip" 只在大跌时买 TQQQ
   var FEE = 0.0005; // 换仓的点差 + 手续费假设 0.05%
 
+  // 卖出规则现在要不要减仓、减到多少（返回目标占比 %，null = 不动）
+  // 只看 i 这一天（调用方传前一个交易日），不偷看未来
+  function sellTargetFor(cfg, dd, tl, i) {
+    if (i < 0) return null;
+    if (cfg.sellMode === "ma") {
+      // 站回均线上方就全卖
+      return tl.ok[i] && tl.dev[i] >= 0 ? 0 : null;
+    }
+    if (cfg.sellMode === "peak") {
+      // 离近一年最高点已经不远了，就减到目标比例
+      return dd[i] <= cfg.sellPeakWithin ? cfg.sellTargetShare : null;
+    }
+    return null; // "cap" 和 "none" 不靠择时卖
+  }
+
   function backtest(series, config, opts) {
     opts = opts || {};
     var cfg = withDefaults(config);
@@ -328,7 +457,8 @@
     var days = investDays(series, cfg.investWeekday, cfg.frequency);
     for (var a = 0; a < days.length; a++) if (days[a] >= startIdx && days[a] < endIdx) isInvestDay[days[a]] = 1;
 
-    var shQ = 0, shT = 0, invested = 0, times = 0, tqqqBuys = 0, rebalances = 0, feePaid = 0;
+    var sells = cfg.sellMode === "ma" || cfg.sellMode === "peak";
+    var shQ = 0, shT = 0, invested = 0, times = 0, tqqqBuys = 0, rebalances = 0, feePaid = 0, sold = 0;
     var flows = [];
     var curve = [], tshare = [], ratio = [];
     var peak = 0, mdd = 0, mddDate = null;
@@ -345,22 +475,34 @@
         var toT = 0;
         if (mode === "fixed") toT = amt * fixedShare / 100;
         else if (mode === "dip" && r.buyTqqq) toT = amt * cfg.flowShare / 100;
-        if (mode === "dip" && cfg.sellOnRecover && tl.ok[i - 1] && tl.dev[i - 1] >= 0 && shT > 0) {
-          var v0 = shT * series.t[i];
-          feePaid += v0 * FEE;
-          shQ += v0 * (1 - FEE) / series.adj[i];
-          shT = 0; rebalances++;
+        // ① 先按卖出规则减仓（用前一个交易日的行情判断，不偷看当天）
+        var hasT = mode !== "plainQ" && mode !== "comboQ";
+        if (hasT && shT > 0 && sells) {
+          var want = sellTargetFor(cfg, dd, tl, i - 1); // 想把 TQQQ 降到组合的百分之几；null = 不动
+          if (want !== null) {
+            var tv0 = shT * series.t[i], tot0 = shQ * series.adj[i] + tv0;
+            var keep = tot0 * want / 100;
+            if (tot0 > 0 && tv0 > keep + 1e-9) {
+              var cut = tv0 - keep;
+              shT -= cut / series.t[i];
+              feePaid += cut * FEE;
+              shQ += cut * (1 - FEE) / series.adj[i];
+              sold += cut; rebalances++;
+            }
+          }
         }
+        // ② 再买
         if (toT > 0) { shT += toT / series.t[i]; tqqqBuys++; }
         if (amt - toT > 0) shQ += (amt - toT) / series.adj[i];
-        if (mode !== "plainQ" && mode !== "comboQ" && cfg.tqqqCap < 100) {
+        // ③ 买完再守一次上限（"none" 连上限都不守）
+        if (hasT && cfg.sellMode !== "none" && cfg.tqqqCap < 100) {
           var tv = shT * series.t[i], tot = shQ * series.adj[i] + tv;
           if (tot > 0 && tv / tot > cfg.tqqqCap / 100) {
             var ex = tv - tot * cfg.tqqqCap / 100;
             shT -= ex / series.t[i];
             feePaid += ex * FEE;
             shQ += ex * (1 - FEE) / series.adj[i];
-            rebalances++;
+            sold += ex; rebalances++;
           }
         }
       }
@@ -391,6 +533,8 @@
       tqqqBuys: tqqqBuys,
       rebalances: rebalances,
       feePaid: feePaid,
+      sold: sold,
+      sellMode: cfg.sellMode,
       invested: invested,
       value: value,
       valueQ: shQ * series.adj[last],
@@ -755,6 +899,8 @@
     DEFAULT_CONFIG: DEFAULT_CONFIG,
     STEADY_DEFAULT: STEADY_DEFAULT,
     REBALANCE_NAMES: REBALANCE_NAMES,
+    SELL_MODES: SELL_MODES,
+    SELL_NAMES: SELL_NAMES,
     MODE_NAMES: MODE_NAMES,
     STATE_LABELS: STATE_LABELS,
     WEEKDAY_CN: WEEKDAY_CN,
@@ -774,6 +920,8 @@
     investDays: investDays,
     nextInvestDate: nextInvestDate,
     currentSignal: currentSignal,
+    currentStatus: currentStatus,
+    sellTargetFor: sellTargetFor,
     xirr: xirr,
     backtest: backtest,
     steadyAlloc: steadyAlloc,
