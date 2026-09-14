@@ -1,5 +1,5 @@
 # 这个文件在 GitHub 仓库里的位置必须是：.github/workflows/update-and-deploy.yml
-# 每个美股交易日收盘后：拉最新 QQQ 和 TQQQ 行情 → 保存到 docs/data.json → 发布网站到 GitHub Pages
+# 每个美股交易日收盘后：拉最新 QQQ、TQQQ、SPY 行情 → 保存到 docs/data.json → 发布网站到 GitHub Pages
 
 name: 每日更新数据并发布网站
 
